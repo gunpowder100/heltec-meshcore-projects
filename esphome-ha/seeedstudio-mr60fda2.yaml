@@ -1,0 +1,60 @@
+esphome:
+  name: seeedstudio-mr60fda2
+  friendly_name: "mmWave 60GHz Sensor"
+
+esp32:
+  board: seeed_xiao_esp32s3
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32_WIFI_ENABLE_WPA3_SAE: "n"
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  networks:
+    - ssid: !secret JonS_Office_ssid
+      password: !secret JonS_Office_password
+    - ssid: !secret Basement_II_ssid
+      password: !secret Basement_II_password
+    - ssid: !secret Martin_Router_King_ssid
+      password: !secret Martin_Router_King_password
+      hidden: true
+    - ssid: !secret Wifi_4_Kettwig_ssid
+      password: !secret Wifi_4_Kettwig_password
+      hidden: true
+  ap:
+    ssid: "Seeedstudio-Mr60Fda2"
+    password: "esphome123"
+  manual_ip:
+    static_ip: 192.168.178.95
+    gateway: 192.168.178.1
+    subnet: 255.255.255.0
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO43
+  rx_pin: GPIO44
+  baud_rate: 115200
+  parity: NONE
+  stop_bits: 1
+
+seeed_mr60fda2:
+  id: mmwave_hub
+  uart_id: uart_bus
+
+binary_sensor:
+  - platform: seeed_mr60fda2
+    people_exist:
+      name: "Human Detected"
+      id: human_detected
+      device_class: occupancy

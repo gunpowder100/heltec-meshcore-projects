@@ -1,0 +1,623 @@
+esphome:
+  name: heltec-v4-display
+  friendly_name: "Heltec V4 Display"
+  on_boot:
+    priority: 800
+    then:
+      - switch.turn_on: vext_sw
+      - switch.turn_on: adc_ctrl
+      - delay: 300ms       # give VEXT rail time to stabilise
+      - switch.turn_on: backlight
+      - output.turn_off: touch_rst  # assert reset (active LOW)
+      - delay: 50ms                  # hold reset long enough for chip to see it
+      - output.turn_on: touch_rst   # deassert reset
+      - delay: 200ms                 # allow CHSC6X to boot before first poll
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+
+psram:
+  mode: quad
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+    - ssid: !secret wifi_ssid2
+      password: !secret wifi_password2
+    - ssid: !secret wifi_ssid3
+      password: !secret wifi_password3
+  manual_ip:
+    static_ip: 192.168.178.93
+    gateway: 192.168.178.1
+    subnet: 255.255.255.0
+
+switch:
+  - platform: gpio
+    name: "Vext"
+    id: vext_sw
+    pin:
+      number: GPIO36
+      inverted: true
+    restore_mode: ALWAYS_ON
+    setup_priority: 950   # must be > 900 so VEXT is ON before I2C bus init
+    internal: true
+
+  - platform: gpio
+    name: "ADC Ctrl"
+    id: adc_ctrl
+    pin:
+      number: GPIO37
+      inverted: false
+    restore_mode: ALWAYS_ON
+    setup_priority: 940
+    internal: true
+
+  - platform: gpio
+    name: "Backlight"
+    id: backlight
+    pin:
+      number: GPIO21
+      inverted: false
+    restore_mode: ALWAYS_ON
+    setup_priority: 500
+    internal: true
+
+output:
+  - platform: gpio
+    pin: GPIO44
+    id: touch_rst
+
+i2c:
+  sda: GPIO47
+  scl: GPIO48
+  scan: true
+  frequency: 100kHz
+
+touchscreen:
+  - platform: chsc6x
+    id: touch_panel
+    address: 0x2E
+    update_interval: 50ms
+    on_touch:
+      - logger.log:
+          format: "Touch x=%d y=%d"
+          args: [touch.x, touch.y]
+    on_release:
+      - logger.log: "Touch released"
+
+spi:
+  clk_pin: GPIO17
+  mosi_pin: GPIO33
+
+# ── NINA binary sensors ───────────────────────────────────────
+binary_sensor:
+  - platform: homeassistant
+    id: nina_ddf
+    entity_id: binary_sensor.nina_warning_dusseldorf_stadt_1
+    on_state:
+      - if:
+          condition: {lambda: 'return x;'}
+          then:
+            - lvgl.widget.update:
+                id: btn_ddf
+                bg_color: 0x8B0000
+            - lvgl.label.update:
+                id: lbl_ddf
+                text: "WARN"
+                text_color: 0xFF4444
+          else:
+            - lvgl.widget.update:
+                id: btn_ddf
+                bg_color: 0x0D2B0D
+            - lvgl.label.update:
+                id: lbl_ddf
+                text: "OK"
+                text_color: 0x44FF88
+
+  - platform: homeassistant
+    id: nina_dui
+    entity_id: binary_sensor.nina_warning_duisburg_stadt_1
+    on_state:
+      - if:
+          condition: {lambda: 'return x;'}
+          then:
+            - lvgl.widget.update:
+                id: btn_dui
+                bg_color: 0x8B0000
+            - lvgl.label.update:
+                id: lbl_dui
+                text: "WARN"
+                text_color: 0xFF4444
+          else:
+            - lvgl.widget.update:
+                id: btn_dui
+                bg_color: 0x0D2B0D
+            - lvgl.label.update:
+                id: lbl_dui
+                text: "OK"
+                text_color: 0x44FF88
+
+  - platform: homeassistant
+    id: nina_ess
+    entity_id: binary_sensor.nina_warning_essen_stadt_1
+    on_state:
+      - if:
+          condition: {lambda: 'return x;'}
+          then:
+            - lvgl.widget.update:
+                id: btn_ess
+                bg_color: 0x8B0000
+            - lvgl.label.update:
+                id: lbl_ess
+                text: "WARN"
+                text_color: 0xFF4444
+          else:
+            - lvgl.widget.update:
+                id: btn_ess
+                bg_color: 0x0D2B0D
+            - lvgl.label.update:
+                id: lbl_ess
+                text: "OK"
+                text_color: 0x44FF88
+
+  - platform: homeassistant
+    id: nina_mue
+    entity_id: binary_sensor.nina_warning_mulheim_an_der_ruhr_stadt_1
+    on_state:
+      - if:
+          condition: {lambda: 'return x;'}
+          then:
+            - lvgl.widget.update:
+                id: btn_mue
+                bg_color: 0x8B0000
+            - lvgl.label.update:
+                id: lbl_mue
+                text: "WARN"
+                text_color: 0xFF4444
+          else:
+            - lvgl.widget.update:
+                id: btn_mue
+                bg_color: 0x0D2B0D
+            - lvgl.label.update:
+                id: lbl_mue
+                text: "OK"
+                text_color: 0x44FF88
+
+  - platform: homeassistant
+    id: nina_obe
+    entity_id: binary_sensor.nina_warning_oberhausen_stadt_1
+    on_state:
+      - if:
+          condition: {lambda: 'return x;'}
+          then:
+            - lvgl.widget.update:
+                id: btn_obe
+                bg_color: 0x8B0000
+            - lvgl.label.update:
+                id: lbl_obe
+                text: "WARN"
+                text_color: 0xFF4444
+          else:
+            - lvgl.widget.update:
+                id: btn_obe
+                bg_color: 0x0D2B0D
+            - lvgl.label.update:
+                id: lbl_obe
+                text: "OK"
+                text_color: 0x44FF88
+
+  - platform: homeassistant
+    id: nina_met
+    entity_id: binary_sensor.nina_warning_mettmann_stadt_mettmann_nordrhein_westfalen_velbert_stadt_mettmann_nordrhein_westfalen_1
+    on_state:
+      - if:
+          condition: {lambda: 'return x;'}
+          then:
+            - lvgl.widget.update:
+                id: btn_met
+                bg_color: 0x8B0000
+            - lvgl.label.update:
+                id: lbl_met
+                text: "WARN"
+                text_color: 0xFF4444
+          else:
+            - lvgl.widget.update:
+                id: btn_met
+                bg_color: 0x0D2B0D
+            - lvgl.label.update:
+                id: lbl_met
+                text: "OK"
+                text_color: 0x44FF88
+
+
+sensor:
+  - platform: adc
+    pin: GPIO1
+    id: battery_voltage
+    name: "Battery Voltage"
+    update_interval: 30s
+    attenuation: 12db
+    filters:
+      - multiply: 4.9        # VBAT = 100/(100+390) * VADC → x4.9
+      - sliding_window_moving_average:
+          window_size: 3
+          send_every: 1
+    on_value:
+      - lvgl.label.update:
+          id: lbl_battery
+          text: !lambda |-
+            float v = x;
+            int pct = (int)((v - 3.3f) / (4.2f - 3.3f) * 100.0f);
+            if (pct > 100) pct = 100;
+            if (pct < 0) pct = 0;
+            static char buf[16];
+            snprintf(buf, sizeof(buf), "BAT %d%%", pct);
+            return buf;
+
+text_sensor:
+  - platform: homeassistant
+    id: nina_warning_text
+    entity_id: input_text.nina_active_warnings
+
+  - platform: homeassistant
+    id: nina_warn_ddf
+    entity_id: input_text.nina_warn_ddf
+
+  - platform: homeassistant
+    id: nina_warn_dui
+    entity_id: input_text.nina_warn_dui
+
+  - platform: homeassistant
+    id: nina_warn_ess
+    entity_id: input_text.nina_warn_ess
+
+  - platform: homeassistant
+    id: nina_warn_mue
+    entity_id: input_text.nina_warn_mue
+
+  - platform: homeassistant
+    id: nina_warn_obe
+    entity_id: input_text.nina_warn_obe
+
+  - platform: homeassistant
+    id: nina_warn_met
+    entity_id: input_text.nina_warn_met
+
+display:
+  - platform: ili9xxx
+    model: ST7789V
+    id: main_display
+    cs_pin: GPIO15
+    dc_pin: GPIO16
+    reset_pin: GPIO18
+    invert_colors: true
+    rotation: 0
+    dimensions:
+      height: 320
+      width: 240
+    auto_clear_enabled: false
+    update_interval: never
+
+lvgl:
+  displays:
+    - main_display
+  touchscreens:
+    - touch_panel
+  color_depth: 16
+  bg_color: 0x1a1a2e
+  default_font: montserrat_14
+
+  pages:
+
+    # ── PAGE 1: NINA Ruhrpott grid ────────────────────────────
+    - id: page_nina
+      bg_color: 0x1a1a2e
+      widgets:
+
+        - label:
+            text: "NINA Ruhrpott"
+            align: TOP_MID
+            y: 6
+            text_color: 0xFF6600
+            text_font: montserrat_18
+
+        # Row 1 — Düsseldorf | Duisburg
+        - button:
+            id: btn_ddf
+            align: TOP_LEFT
+            x: 4
+            y: 38
+            width: 112
+            height: 68
+            bg_color: 0x0D2B0D
+            border_color: 0x226622
+            border_width: 1
+            radius: 8
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_detail_city
+                  text: "Dusseldorf"
+              - lvgl.label.update:
+                  id: lbl_detail_text
+                  text: !lambda 'return id(nina_warn_ddf).state.empty() ? "Keine Warnung" : id(nina_warn_ddf).state;'
+              - lvgl.page.show: page_detail
+            widgets:
+              - label:
+                  text: "Dusseldorf"
+                  align: TOP_MID
+                  y: 6
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_ddf
+                  text: "OK"
+                  align: BOTTOM_MID
+                  y: -8
+                  text_color: 0x44FF88
+                  text_font: montserrat_20
+
+        - button:
+            id: btn_dui
+            align: TOP_RIGHT
+            x: -4
+            y: 38
+            width: 112
+            height: 68
+            bg_color: 0x0D2B0D
+            border_color: 0x226622
+            border_width: 1
+            radius: 8
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_detail_city
+                  text: "Duisburg"
+              - lvgl.label.update:
+                  id: lbl_detail_text
+                  text: !lambda 'return id(nina_warn_dui).state.empty() ? "Keine Warnung" : id(nina_warn_dui).state;'
+              - lvgl.page.show: page_detail
+            widgets:
+              - label:
+                  text: "Duisburg"
+                  align: TOP_MID
+                  y: 6
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_dui
+                  text: "OK"
+                  align: BOTTOM_MID
+                  y: -8
+                  text_color: 0x44FF88
+                  text_font: montserrat_20
+
+        # Row 2 — Essen | Mülheim
+        - button:
+            id: btn_ess
+            align: TOP_LEFT
+            x: 4
+            y: 114
+            width: 112
+            height: 68
+            bg_color: 0x0D2B0D
+            border_color: 0x226622
+            border_width: 1
+            radius: 8
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_detail_city
+                  text: "Essen"
+              - lvgl.label.update:
+                  id: lbl_detail_text
+                  text: !lambda 'return id(nina_warn_ess).state.empty() ? "Keine Warnung" : id(nina_warn_ess).state;'
+              - lvgl.page.show: page_detail
+            widgets:
+              - label:
+                  text: "Essen"
+                  align: TOP_MID
+                  y: 6
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_ess
+                  text: "OK"
+                  align: BOTTOM_MID
+                  y: -8
+                  text_color: 0x44FF88
+                  text_font: montserrat_20
+
+        - button:
+            id: btn_mue
+            align: TOP_RIGHT
+            x: -4
+            y: 114
+            width: 112
+            height: 68
+            bg_color: 0x0D2B0D
+            border_color: 0x226622
+            border_width: 1
+            radius: 8
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_detail_city
+                  text: "Mulheim"
+              - lvgl.label.update:
+                  id: lbl_detail_text
+                  text: !lambda 'return id(nina_warn_mue).state.empty() ? "Keine Warnung" : id(nina_warn_mue).state;'
+              - lvgl.page.show: page_detail
+            widgets:
+              - label:
+                  text: "Mulheim"
+                  align: TOP_MID
+                  y: 6
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_mue
+                  text: "OK"
+                  align: BOTTOM_MID
+                  y: -8
+                  text_color: 0x44FF88
+                  text_font: montserrat_20
+
+        # Row 3 — Oberhausen | Mettmann
+        - button:
+            id: btn_obe
+            align: TOP_LEFT
+            x: 4
+            y: 190
+            width: 112
+            height: 68
+            bg_color: 0x0D2B0D
+            border_color: 0x226622
+            border_width: 1
+            radius: 8
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_detail_city
+                  text: "Oberhausen"
+              - lvgl.label.update:
+                  id: lbl_detail_text
+                  text: !lambda 'return id(nina_warn_obe).state.empty() ? "Keine Warnung" : id(nina_warn_obe).state;'
+              - lvgl.page.show: page_detail
+            widgets:
+              - label:
+                  text: "Oberhausen"
+                  align: TOP_MID
+                  y: 6
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_obe
+                  text: "OK"
+                  align: BOTTOM_MID
+                  y: -8
+                  text_color: 0x44FF88
+                  text_font: montserrat_20
+
+        - button:
+            id: btn_met
+            align: TOP_RIGHT
+            x: -4
+            y: 190
+            width: 112
+            height: 68
+            bg_color: 0x0D2B0D
+            border_color: 0x226622
+            border_width: 1
+            radius: 8
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_detail_city
+                  text: "Mettmann"
+              - lvgl.label.update:
+                  id: lbl_detail_text
+                  text: !lambda 'return id(nina_warn_met).state.empty() ? "Keine Warnung" : id(nina_warn_met).state;'
+              - lvgl.page.show: page_detail
+            widgets:
+              - label:
+                  text: "Mettmann"
+                  align: TOP_MID
+                  y: 6
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_met
+                  text: "OK"
+                  align: BOTTOM_MID
+                  y: -8
+                  text_color: 0x44FF88
+                  text_font: montserrat_20
+
+        # Bottom bar: hint + battery
+        - label:
+            text: "Tap city for details"
+            align: BOTTOM_LEFT
+            x: 8
+            y: -6
+            text_color: 0x446688
+            text_font: montserrat_12
+
+        - label:
+            id: lbl_battery
+            text: "..."
+            align: BOTTOM_RIGHT
+            x: -8
+            y: -6
+            text_color: 0x446688
+            text_font: montserrat_12
+
+    # ── PAGE 2: Warning detail ────────────────────────────────
+    - id: page_detail
+      bg_color: 0x1a1a2e
+      widgets:
+
+        - label:
+            text: "NINA Warnung:"
+            align: TOP_LEFT
+            x: 10
+            y: 8
+            text_color: 0xFF6600
+            text_font: montserrat_14
+
+        - label:
+            id: lbl_detail_city
+            text: "---"
+            align: TOP_LEFT
+            x: 10
+            y: 28
+            text_color: 0xFFFFFF
+            text_font: montserrat_22
+
+        - obj:
+            align: TOP_MID
+            y: 60
+            width: 220
+            height: 2
+            bg_color: 0x334433
+            border_width: 0
+            pad_all: 0
+
+        - label:
+            id: lbl_detail_text
+            text: "Lade..."
+            align: TOP_LEFT
+            x: 10
+            y: 72
+            text_color: 0xCCCCCC
+            text_font: montserrat_14
+            long_mode: WRAP
+            width: 220
+
+        - button:
+            align: BOTTOM_MID
+            y: -4
+            width: 232
+            height: 40
+            bg_color: 0x0a1a0a
+            border_color: 0xFF6600
+            border_width: 1
+            radius: 8
+            on_click:
+              - lvgl.page.show: page_nina
+            widgets:
+              - label:
+                  text: "<- Ruhrpott"
+                  text_color: 0xFF6600
+                  text_font: montserrat_16
+                  align: CENTER

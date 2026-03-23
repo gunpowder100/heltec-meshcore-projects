@@ -1,0 +1,2286 @@
+################################################################################
+# ESPHome – Heltec V4 Expansion Kit
+# Halo Sensor Dashboard (Seite 1, Landscape) + NINA Ruhrpott (Seite 2)
+# Touch → Sensor-Detailansicht mit Min/Max/Verlauf (Seiten 4-9)
+#
+# Display: ST7789V 240×320 → rotation 270 → 320×240 Landscape (umgedreht)
+# IP: 192.168.178.93 (static)
+################################################################################
+
+esphome:
+  name: heltec-v4-display
+  friendly_name: "Heltec V4 Display"
+  on_boot:
+    priority: 800
+    then:
+      - switch.turn_on: vext_sw
+      - switch.turn_on: adc_ctrl
+      - delay: 300ms
+      - switch.turn_on: backlight
+      - output.turn_off: touch_rst
+      - delay: 50ms
+      - output.turn_on: touch_rst
+      - delay: 200ms
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+
+psram:
+  mode: quad
+  speed: 80MHz
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+    - ssid: !secret wifi_ssid2
+      password: !secret wifi_password2
+    - ssid: !secret wifi_ssid3
+      password: !secret wifi_password3
+  manual_ip:
+    static_ip: 192.168.178.93
+    gateway: 192.168.178.1
+    subnet: 255.255.255.0
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    timezone: Europe/Berlin
+
+# ── Hardware ──────────────────────────────────────────────────────────────────
+switch:
+  - platform: gpio
+    name: "Vext"
+    id: vext_sw
+    pin:
+      number: GPIO36
+      inverted: true
+    restore_mode: ALWAYS_ON
+    setup_priority: 950
+    internal: true
+
+  - platform: gpio
+    name: "ADC Ctrl"
+    id: adc_ctrl
+    pin:
+      number: GPIO37
+      inverted: false
+    restore_mode: ALWAYS_ON
+    setup_priority: 940
+    internal: true
+
+  - platform: gpio
+    name: "Backlight"
+    id: backlight
+    pin:
+      number: GPIO21
+      inverted: false
+    restore_mode: ALWAYS_ON
+    setup_priority: 500
+    internal: true
+
+output:
+  - platform: gpio
+    pin: GPIO44
+    id: touch_rst
+
+i2c:
+  sda: GPIO47
+  scl: GPIO48
+  scan: false
+  frequency: 100kHz
+
+touchscreen:
+  - platform: chsc6x
+    id: touch_panel
+    address: 0x2E
+    update_interval: 50ms
+
+spi:
+  clk_pin: GPIO17
+  mosi_pin: GPIO33
+
+# ── Physische Buttons werden unten im binary_sensor Block ergänzt ─────────────
+
+# ── Globals: Min/Max tracking per sensor ─────────────────────────────────────
+globals:
+  - id: g_temp_min
+    type: float
+    restore_value: false
+    initial_value: '999.0'
+  - id: g_temp_max
+    type: float
+    restore_value: false
+    initial_value: '-999.0'
+
+  - id: g_vape_min
+    type: float
+    restore_value: false
+    initial_value: '999.0'
+  - id: g_vape_max
+    type: float
+    restore_value: false
+    initial_value: '-999.0'
+
+  - id: g_pres_count
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: g_pres_total
+    type: int
+    restore_value: false
+    initial_value: '0'
+
+  - id: g_lux_min
+    type: float
+    restore_value: false
+    initial_value: '99999.0'
+  - id: g_lux_max
+    type: float
+    restore_value: false
+    initial_value: '0.0'
+
+  - id: g_hum_min
+    type: float
+    restore_value: false
+    initial_value: '999.0'
+  - id: g_hum_max
+    type: float
+    restore_value: false
+    initial_value: '0.0'
+
+  - id: g_noise_min
+    type: float
+    restore_value: false
+    initial_value: '999.0'
+  - id: g_noise_max
+    type: float
+    restore_value: false
+    initial_value: '0.0'
+
+  - id: g_vape_blink
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  - id: g_vape_active
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+# ── Sensors ───────────────────────────────────────────────────────────────────
+sensor:
+  - platform: adc
+    pin: GPIO1
+    id: battery_voltage
+    name: "Battery Voltage"
+    update_interval: 30s
+    attenuation: 12db
+    filters:
+      - multiply: 4.9
+      - sliding_window_moving_average:
+          window_size: 3
+          send_every: 1
+    on_value:
+      - lvgl.label.update:
+          id: lbl_battery
+          text: !lambda |-
+            float v = x;
+            int pct = (int)((v - 3.3f) / (4.2f - 3.3f) * 100.0f);
+            if (pct > 100) pct = 100;
+            if (pct < 0) pct = 0;
+            // Block symbol: ▓▓▓░ style using ASCII chars
+            const char* icon = pct > 75 ? "[||||]" : pct > 50 ? "[|||_]" : pct > 25 ? "[||__]" : "[|___]";
+            static char buf[20];
+            snprintf(buf, sizeof(buf), "%s %d%%", icon, pct);
+            return buf;
+          text_color: !lambda |-
+            float v = x;
+            int pct = (int)((v - 3.3f) / (4.2f - 3.3f) * 100.0f);
+            return pct > 25 ? lv_color_hex(0x44FF88) : lv_color_hex(0xFF4400);
+      - lvgl.label.update:
+          id: lbl_sys_bat_pct
+          text: !lambda |-
+            float v = x;
+            int pct = (int)((v - 3.3f) / (4.2f - 3.3f) * 100.0f);
+            if (pct > 100) pct = 100;
+            if (pct < 0) pct = 0;
+            static char buf[8];
+            snprintf(buf, sizeof(buf), "%d%%", pct);
+            return buf;
+          text_color: !lambda |-
+            float v = x;
+            int pct = (int)((v - 3.3f) / (4.2f - 3.3f) * 100.0f);
+            return pct > 25 ? lv_color_hex(0x44FF88) : lv_color_hex(0xFF4400);
+      - lvgl.label.update:
+          id: lbl_sys_bat_bar
+          text: !lambda |-
+            float v = x;
+            int pct = (int)((v - 3.3f) / (4.2f - 3.3f) * 100.0f);
+            if (pct > 100) pct = 100;
+            if (pct < 0) pct = 0;
+            const char* bar = pct > 75 ? "[||||]" : pct > 50 ? "[|||_]" : pct > 25 ? "[||__]" : "[|___]";
+            static char b[10];
+            strncpy(b, bar, 9);
+            return b;
+      - lvgl.label.update:
+          id: lbl_sys_bat_icon
+          text: !lambda |-
+            float v = x;
+            int pct = (int)((v - 3.3f) / (4.2f - 3.3f) * 100.0f);
+            if (pct > 100) pct = 100;
+            if (pct < 0) pct = 0;
+            // MDI battery icons: 90=F0082, 80=F0081, 70=F0080, 50=F007E, 20=F007B, empty=F008E
+            static char b[5];
+            uint32_t cp = pct > 85 ? 0xF0082 : pct > 75 ? 0xF0081 : pct > 65 ? 0xF0080 : pct > 40 ? 0xF007E : pct > 15 ? 0xF007B : 0xF008E;
+            b[0] = 0xF0 | (cp >> 18); b[1] = 0x80 | ((cp >> 12) & 0x3F); b[2] = 0x80 | ((cp >> 6) & 0x3F); b[3] = 0x80 | (cp & 0x3F); b[4] = 0;
+            return b;
+          text_color: !lambda |-
+            float v = x;
+            int pct = (int)((v - 3.3f) / (4.2f - 3.3f) * 100.0f);
+            return pct > 25 ? lv_color_hex(0x44FF88) : lv_color_hex(0xFF4400);
+
+  - platform: homeassistant
+    id: weather_temp
+    entity_id: weather.forecast_home
+    attribute: temperature
+    name: "Wetter Temp"
+    on_value:
+      - lvgl.label.update:
+          id: lbl_weather_temp
+          text: !lambda |-
+            static char b[12];
+            snprintf(b, sizeof(b), "%.1f°C", x);
+            return b;
+
+  - platform: homeassistant
+    id: weather_humidity
+    entity_id: weather.forecast_home
+    attribute: humidity
+    name: "Wetter Humidity"
+    on_value:
+      - lvgl.label.update:
+          id: lbl_weather_hum
+          text: !lambda |-
+            static char b[10];
+            snprintf(b, sizeof(b), "%.0f%%", x);
+            return b;
+
+  - platform: homeassistant
+    id: halo_temp
+    entity_id: input_number.halo_temp
+    name: "Halo Temp"
+    filters:
+      - heartbeat: 10s
+    on_value:
+      - lambda: |-
+          if (x < id(g_temp_min)) id(g_temp_min) = x;
+          if (x > id(g_temp_max)) id(g_temp_max) = x;
+      - lvgl.label.update:
+          id: lbl_temp_val
+          text: !lambda |-
+            static char buf[10];
+            snprintf(buf, sizeof(buf), "%.1f", x);
+            return buf;
+      - lvgl.label.update:
+          id: lbl_temp_big
+          text: !lambda |-
+            static char buf[12];
+            snprintf(buf, sizeof(buf), "%.1f °C", x);
+            return buf;
+      - lvgl.label.update:
+          id: lbl_temp_stat
+          text: !lambda |-
+            static char buf[32];
+            snprintf(buf, sizeof(buf), "Min %.1f  Max %.1f", id(g_temp_min), id(g_temp_max));
+            return buf;
+      - lvgl.bar.update:
+          id: bar_temp
+          value: !lambda |-
+            // map temp 0-40 → 0-100
+            int v = (int)((x / 40.0f) * 100.0f);
+            if (v < 0) v = 0;
+            if (v > 100) v = 100;
+            return v;
+
+  - platform: homeassistant
+    id: halo_vape
+    entity_id: input_number.halo_vape
+    name: "Halo Vape"
+    filters:
+      - heartbeat: 10s
+    on_value:
+      - lambda: |-
+          if (x < id(g_vape_min)) id(g_vape_min) = x;
+          if (x > id(g_vape_max)) id(g_vape_max) = x;
+      - lambda: 'id(g_vape_active) = (x > 0.5f);'
+      - if:
+          condition:
+            lambda: 'return x > 0.5f;'
+          then:
+            - lvgl.label.update:
+                id: lbl_vape_val
+                text: "\U000F04B4"
+                text_font: font_mdi_40
+                text_color: 0xFF3300
+            - lvgl.widget.update:
+                id: btn_vape
+                bg_color: 0x5A0000
+          else:
+            - lvgl.label.update:
+                id: lbl_vape_val
+                text: "\U000F04B4"
+                text_font: font_mdi_40
+                text_color: 0x44FF88
+            - lvgl.widget.update:
+                id: btn_vape
+                bg_color: 0x0D2233
+      - lvgl.label.update:
+          id: lbl_vape_big
+          text: !lambda |-
+            static char buf[10];
+            snprintf(buf, sizeof(buf), "%.0f", x);
+            return buf;
+      - lvgl.label.update:
+          id: lbl_vape_stat
+          text: !lambda |-
+            static char buf[32];
+            snprintf(buf, sizeof(buf), "Min %.0f  Max %.0f", id(g_vape_min), id(g_vape_max));
+            return buf;
+      - lvgl.bar.update:
+          id: bar_vape
+          value: !lambda |-
+            int v = (int)(x);
+            if (v < 0) v = 0;
+            if (v > 100) v = 100;
+            return v;
+
+  - platform: homeassistant
+    id: halo_occupancy
+    entity_id: input_number.halo_occupancy
+    name: "Halo Occupancy"
+    filters:
+      - heartbeat: 10s
+    on_value:
+      - lambda: |-
+          id(g_pres_total)++;
+          if (x >= 1.0f) id(g_pres_count)++;
+      - lvgl.label.update:
+          id: lbl_pres_val
+          text: !lambda |-
+            static char b[10]; strncpy(b, x >= 1.0f ? "ERKANNT" : "FREI", 9); return b;
+      - lvgl.label.update:
+          id: lbl_pres_big
+          text: !lambda |-
+            static char b[10]; strncpy(b, x >= 1.0f ? "ERKANNT" : "FREI", 9); return b;
+      - lvgl.label.update:
+          id: lbl_pres_stat
+          text: !lambda |-
+            static char buf[40];
+            int pct = id(g_pres_total) > 0 ? (id(g_pres_count) * 100 / id(g_pres_total)) : 0;
+            snprintf(buf, sizeof(buf), "Anwesend %d%% der Zeit", pct);
+            return buf;
+      - lvgl.bar.update:
+          id: bar_pres
+          value: !lambda |-
+            return x >= 1.0f ? 100 : 0;
+
+  - platform: homeassistant
+    id: halo_light
+    entity_id: input_number.halo_light
+    name: "Halo Light"
+    filters:
+      - heartbeat: 10s
+    on_value:
+      - lambda: |-
+          if (x < id(g_lux_min)) id(g_lux_min) = x;
+          if (x > id(g_lux_max)) id(g_lux_max) = x;
+      - lvgl.label.update:
+          id: lbl_lux_val
+          text: !lambda |-
+            static char buf[10];
+            if (x >= 1000.0f)
+              snprintf(buf, sizeof(buf), "%.1fk", x/1000.0f);
+            else
+              snprintf(buf, sizeof(buf), "%.0f", x);
+            return buf;
+      - lvgl.label.update:
+          id: lbl_lux_big
+          text: !lambda |-
+            static char buf[14];
+            if (x >= 1000.0f)
+              snprintf(buf, sizeof(buf), "%.1fk lux", x/1000.0f);
+            else
+              snprintf(buf, sizeof(buf), "%.0f lux", x);
+            return buf;
+      - lvgl.label.update:
+          id: lbl_lux_stat
+          text: !lambda |-
+            static char buf[32];
+            snprintf(buf, sizeof(buf), "Min %.0f  Max %.0f", id(g_lux_min), id(g_lux_max));
+            return buf;
+      - lvgl.bar.update:
+          id: bar_lux
+          value: !lambda |-
+            int v = (int)((x / 5000.0f) * 100.0f);
+            if (v < 0) v = 0;
+            if (v > 100) v = 100;
+            return v;
+
+  - platform: homeassistant
+    id: halo_humidity
+    entity_id: input_number.halo_humidity
+    name: "Halo Humidity"
+    filters:
+      - heartbeat: 10s
+    on_value:
+      - lambda: |-
+          if (x < id(g_hum_min)) id(g_hum_min) = x;
+          if (x > id(g_hum_max)) id(g_hum_max) = x;
+      - lvgl.label.update:
+          id: lbl_hum_val
+          text: !lambda |-
+            static char buf[8];
+            snprintf(buf, sizeof(buf), "%.0f", x);
+            return buf;
+      - lvgl.label.update:
+          id: lbl_hum_big
+          text: !lambda |-
+            static char buf[10];
+            snprintf(buf, sizeof(buf), "%.0f %%", x);
+            return buf;
+      - lvgl.label.update:
+          id: lbl_hum_stat
+          text: !lambda |-
+            static char buf[32];
+            snprintf(buf, sizeof(buf), "Min %.0f%%  Max %.0f%%", id(g_hum_min), id(g_hum_max));
+            return buf;
+      - lvgl.bar.update:
+          id: bar_hum
+          value: !lambda |-
+            int v = (int)x;
+            if (v < 0) v = 0;
+            if (v > 100) v = 100;
+            return v;
+
+  - platform: homeassistant
+    id: halo_noise
+    entity_id: input_number.halo_noise
+    name: "Halo Noise"
+    filters:
+      - heartbeat: 10s
+    on_value:
+      - lambda: |-
+          if (x < id(g_noise_min)) id(g_noise_min) = x;
+          if (x > id(g_noise_max)) id(g_noise_max) = x;
+      - lvgl.label.update:
+          id: lbl_noise_val
+          text: !lambda |-
+            static char buf[8];
+            snprintf(buf, sizeof(buf), "%.0f", x);
+            return buf;
+      - lvgl.label.update:
+          id: lbl_noise_big
+          text: !lambda |-
+            static char buf[12];
+            snprintf(buf, sizeof(buf), "%.0f dB", x);
+            return buf;
+      - lvgl.label.update:
+          id: lbl_noise_stat
+          text: !lambda |-
+            static char buf[32];
+            snprintf(buf, sizeof(buf), "Min %.0f  Max %.0f", id(g_noise_min), id(g_noise_max));
+            return buf;
+      - lvgl.bar.update:
+          id: bar_noise
+          value: !lambda |-
+            int v = (int)((x / 120.0f) * 100.0f);
+            if (v < 0) v = 0;
+            if (v > 100) v = 100;
+            return v;
+
+text_sensor:
+  - platform: homeassistant
+    id: weather_state
+    entity_id: weather.forecast_home
+    name: "Wetter"
+    on_value:
+      - lvgl.label.update:
+          id: lbl_weather_state
+          text: !lambda |-
+            static char b[20];
+            strncpy(b, x.c_str(), 19);
+            return b;
+
+  - platform: wifi_info
+    ip_address:
+      name: "WiFi IP"
+      id: wifi_ip
+      on_value:
+        - if:
+            condition:
+              lambda: 'return x.length() > 3;'
+            then:
+              - lvgl.label.update:
+                  id: lbl_wifi_icon
+                  text: "\U000F05A9"
+                  text_font: font_mdi_28
+                  text_color: 0x44FF88
+              - lvgl.label.update:
+                  id: lbl_sys_wifi
+                  text: "Verbunden"
+                  text_color: 0x44FF88
+            else:
+              - lvgl.label.update:
+                  id: lbl_wifi_icon
+                  text: "\U000F05A9"
+                  text_font: font_mdi_28
+                  text_color: 0xFF3300
+              - lvgl.label.update:
+                  id: lbl_sys_wifi
+                  text: "Getrennt"
+                  text_color: 0xFF3300
+        - lvgl.label.update:
+            id: lbl_sys_ip
+            text: !lambda |-
+              static char b[20];
+              strncpy(b, x.c_str(), 19);
+              return b;
+
+  - platform: homeassistant
+    id: nina_warn_ddf
+    entity_id: input_text.nina_warn_ddf
+
+  - platform: homeassistant
+    id: nina_warn_dui
+    entity_id: input_text.nina_warn_dui
+
+  - platform: homeassistant
+    id: nina_warn_ess
+    entity_id: input_text.nina_warn_ess
+
+  - platform: homeassistant
+    id: nina_warn_mue
+    entity_id: input_text.nina_warn_mue
+
+  - platform: homeassistant
+    id: nina_warn_obe
+    entity_id: input_text.nina_warn_obe
+
+  - platform: homeassistant
+    id: nina_warn_met
+    entity_id: input_text.nina_warn_met
+
+binary_sensor:
+  # ── Physische Buttons ──────────────────────────────────────────────────────
+  - platform: gpio
+    pin:
+      number: GPIO0
+      inverted: true
+      mode: INPUT_PULLUP
+    name: "Button Oben"
+    id: btn_physical_up
+    filters:
+      - delayed_on: 20ms
+    on_click:
+      - lvgl.page.next:
+          animation: MOVE_LEFT
+          time: 200ms
+
+  - platform: gpio
+    pin:
+      number: GPIO14
+      inverted: true
+      mode: INPUT_PULLUP
+    name: "Button Unten"
+    id: btn_physical_down
+    filters:
+      - delayed_on: 20ms
+    on_click:
+      - lvgl.page.previous:
+          animation: MOVE_RIGHT
+          time: 200ms
+
+  # ── NINA ───────────────────────────────────────────────────────────────────
+  - platform: homeassistant
+    id: nina_ddf
+    entity_id: binary_sensor.nina_warning_dusseldorf_stadt_1
+    on_state:
+      - if:
+          condition: {lambda: 'return x;'}
+          then:
+            - lvgl.widget.update:
+                id: btn_ddf
+                bg_color: 0x8B0000
+            - lvgl.label.update:
+                id: lbl_ddf
+                text: "WARN"
+                text_color: 0xFF4444
+          else:
+            - lvgl.widget.update:
+                id: btn_ddf
+                bg_color: 0x0D2B0D
+            - lvgl.label.update:
+                id: lbl_ddf
+                text: "OK"
+                text_color: 0x44FF88
+
+  - platform: homeassistant
+    id: nina_dui
+    entity_id: binary_sensor.nina_warning_duisburg_stadt_1
+    on_state:
+      - if:
+          condition: {lambda: 'return x;'}
+          then:
+            - lvgl.widget.update:
+                id: btn_dui
+                bg_color: 0x8B0000
+            - lvgl.label.update:
+                id: lbl_dui
+                text: "WARN"
+                text_color: 0xFF4444
+          else:
+            - lvgl.widget.update:
+                id: btn_dui
+                bg_color: 0x0D2B0D
+            - lvgl.label.update:
+                id: lbl_dui
+                text: "OK"
+                text_color: 0x44FF88
+
+  - platform: homeassistant
+    id: nina_ess
+    entity_id: binary_sensor.nina_warning_essen_stadt_1
+    on_state:
+      - if:
+          condition: {lambda: 'return x;'}
+          then:
+            - lvgl.widget.update:
+                id: btn_ess
+                bg_color: 0x8B0000
+            - lvgl.label.update:
+                id: lbl_ess
+                text: "WARN"
+                text_color: 0xFF4444
+          else:
+            - lvgl.widget.update:
+                id: btn_ess
+                bg_color: 0x0D2B0D
+            - lvgl.label.update:
+                id: lbl_ess
+                text: "OK"
+                text_color: 0x44FF88
+
+  - platform: homeassistant
+    id: nina_mue
+    entity_id: binary_sensor.nina_warning_mulheim_an_der_ruhr_stadt_1
+    on_state:
+      - if:
+          condition: {lambda: 'return x;'}
+          then:
+            - lvgl.widget.update:
+                id: btn_mue
+                bg_color: 0x8B0000
+            - lvgl.label.update:
+                id: lbl_mue
+                text: "WARN"
+                text_color: 0xFF4444
+          else:
+            - lvgl.widget.update:
+                id: btn_mue
+                bg_color: 0x0D2B0D
+            - lvgl.label.update:
+                id: lbl_mue
+                text: "OK"
+                text_color: 0x44FF88
+
+  - platform: homeassistant
+    id: nina_obe
+    entity_id: binary_sensor.nina_warning_oberhausen_stadt_1
+    on_state:
+      - if:
+          condition: {lambda: 'return x;'}
+          then:
+            - lvgl.widget.update:
+                id: btn_obe
+                bg_color: 0x8B0000
+            - lvgl.label.update:
+                id: lbl_obe
+                text: "WARN"
+                text_color: 0xFF4444
+          else:
+            - lvgl.widget.update:
+                id: btn_obe
+                bg_color: 0x0D2B0D
+            - lvgl.label.update:
+                id: lbl_obe
+                text: "OK"
+                text_color: 0x44FF88
+
+  - platform: homeassistant
+    id: nina_met
+    entity_id: binary_sensor.nina_warning_mettmann_stadt_mettmann_nordrhein_westfalen_velbert_stadt_mettmann_nordrhein_westfalen_1
+    on_state:
+      - if:
+          condition: {lambda: 'return x;'}
+          then:
+            - lvgl.widget.update:
+                id: btn_met
+                bg_color: 0x8B0000
+            - lvgl.label.update:
+                id: lbl_met
+                text: "WARN"
+                text_color: 0xFF4444
+          else:
+            - lvgl.widget.update:
+                id: btn_met
+                bg_color: 0x0D2B0D
+            - lvgl.label.update:
+                id: lbl_met
+                text: "OK"
+                text_color: 0x44FF88
+
+# ── Display ───────────────────────────────────────────────────────────────────
+# ── MDI Icon Font ─────────────────────────────────────────────────────────────
+font:
+  - file: "fonts/materialdesignicons.ttf"
+    id: font_mdi_40
+    size: 40
+    glyphs: "\U000F04B4"  # mdi:smoking
+
+  - file: "fonts/materialdesignicons.ttf"
+    id: font_mdi_28
+    size: 28
+    glyphs:
+      - "\U000F05A9"  # wifi
+      - "\U000F0082"  # battery-90
+      - "\U000F0081"  # battery-80
+      - "\U000F0080"  # battery-70
+      - "\U000F007E"  # battery-50
+      - "\U000F007B"  # battery-20
+      - "\U000F008E"  # battery-outline (leer)
+      - "\U000F050F"  # thermometer
+      - "\U000F0954"  # clock
+      - "\U000F0595"  # weather-partly-cloudy
+      - "\U000F02FC"  # information
+      - "\U000F0176"  # coffee
+      - "\U000F0174"  # code-tags
+      - "\U000F0320"  # language-python
+      - "\U000F0672"  # language-cpp
+      - "\U000F061A"  # chip
+      - "\U000F0009"  # account-circle
+
+# ── Blink-Intervall für Vape-Alarm ────────────────────────────────────────────
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          auto t = id(ha_time).now();
+          if (t.is_valid()) {
+            static char tbuf[6];
+            snprintf(tbuf, sizeof(tbuf), "%02d:%02d", t.hour, t.minute);
+            lv_label_set_text(id(lbl_sys_time), tbuf);
+            static char dbuf[12];
+            snprintf(dbuf, sizeof(dbuf), "%02d.%02d.%04d", t.day_of_month, t.month, t.year);
+            lv_label_set_text(id(lbl_sys_date), dbuf);
+          }
+
+  - interval: 500ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(g_vape_active);'
+          then:
+            - lambda: 'id(g_vape_blink) = !id(g_vape_blink);'
+            - lvgl.widget.update:
+                id: btn_vape
+                bg_color: !lambda |-
+                  return id(g_vape_blink) ? lv_color_hex(0x8B0000) : lv_color_hex(0xFF2200);
+          else:
+            - lambda: 'id(g_vape_blink) = false;'
+            - lvgl.widget.update:
+                id: btn_vape
+                bg_color: 0x0D2233
+
+display:
+  - platform: ili9xxx
+    model: ST7789V
+    id: main_display
+    cs_pin: GPIO15
+    dc_pin: GPIO16
+    reset_pin: GPIO18
+    invert_colors: true
+    rotation: 270
+    dimensions:
+      height: 320
+      width: 240
+    auto_clear_enabled: false
+    update_interval: never
+
+# ── LVGL ──────────────────────────────────────────────────────────────────────
+lvgl:
+  displays:
+    - main_display
+  touchscreens:
+    - touch_panel
+  color_depth: 16
+  bg_color: 0x0A0A1A
+  default_font: montserrat_14
+  on_idle:
+    timeout: 60s
+    then:
+      - lvgl.page.show: page_halo
+
+  pages:
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SEITE 1: HALO DASHBOARD (Landscape 320×240)
+    # ══════════════════════════════════════════════════════════════════════════
+    - id: page_halo
+      bg_color: 0x0A0A1A
+      widgets:
+        - obj:
+            align: TOP_MID
+            y: 0
+            width: 320
+            height: 30
+            bg_color: 0x0E3D5C
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+              - label:
+                  text: "HALO SENSOR"
+                  align: LEFT_MID
+                  x: 8
+                  text_color: 0xFFE000
+                  text_font: montserrat_14
+              # MDI WiFi-Symbol (initial dunkel = getrennt)
+              - label:
+                  id: lbl_wifi_icon
+                  text: "\U000F05A9"
+                  align: LEFT_MID
+                  x: 112
+                  text_color: 0xFF3300
+                  text_font: font_mdi_28
+              # System-Page Button
+              - button:
+                  align: RIGHT_MID
+                  x: -62
+                  width: 44
+                  height: 22
+                  bg_color: 0x2A4A2A
+                  border_width: 0
+                  radius: 4
+                  on_click:
+                    - lvgl.page.show: page_system
+                  widgets:
+                    - label:
+                        text: "SYS"
+                        text_color: 0xAAFFAA
+                        text_font: montserrat_12
+                        align: CENTER
+              - button:
+                  align: RIGHT_MID
+                  x: -4
+                  width: 55
+                  height: 22
+                  bg_color: 0x1A5080
+                  border_width: 0
+                  radius: 4
+                  on_click:
+                    - lvgl.page.show: page_nina
+                  widgets:
+                    - label:
+                        text: "NINA >"
+                        text_color: 0xFFFFFF
+                        text_font: montserrat_12
+                        align: CENTER
+
+        # Zeile 1: y=30..134
+        - button:
+            id: btn_temp
+            x: 0
+            y: 30
+            width: 106
+            height: 105
+            bg_color: 0x0D2233
+            border_color: 0x1A4466
+            border_width: 1
+            radius: 6
+            on_click:
+              - lvgl.page.show: page_temp
+            widgets:
+              - label:
+                  text: "TEMPERATUR"
+                  align: TOP_MID
+                  y: 6
+                  text_color: 0xFFE000
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_temp_val
+                  text: "--"
+                  align: CENTER
+                  y: -6
+                  text_color: 0x44FF88
+                  text_font: montserrat_20
+              - label:
+                  text: "°C"
+                  align: BOTTOM_MID
+                  y: -6
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+
+        - button:
+            id: btn_vape
+            x: 107
+            y: 30
+            width: 106
+            height: 105
+            bg_color: 0x0D2233
+            border_color: 0x1A4466
+            border_width: 1
+            radius: 6
+            on_click:
+              - lvgl.page.show: page_vape
+            widgets:
+              - label:
+                  text: "VAPE"
+                  align: TOP_MID
+                  y: 6
+                  text_color: 0xFFE000
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_vape_val
+                  text: "--"
+                  align: CENTER
+                  y: -6
+                  text_color: 0x44FF88
+                  text_font: montserrat_20
+              - label:
+                  text: "Index"
+                  align: BOTTOM_MID
+                  y: -6
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+
+        - button:
+            id: btn_pres
+            x: 214
+            y: 30
+            width: 106
+            height: 105
+            bg_color: 0x0D2233
+            border_color: 0x1A4466
+            border_width: 1
+            radius: 6
+            on_click:
+              - lvgl.page.show: page_pres
+            widgets:
+              - label:
+                  text: "PRASENZ"
+                  align: TOP_MID
+                  y: 6
+                  text_color: 0xFFE000
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_pres_val
+                  text: "--"
+                  align: CENTER
+                  y: -6
+                  text_color: 0x44FF88
+                  text_font: montserrat_16
+
+        # Zeile 2: y=135..239
+        - button:
+            id: btn_lux
+            x: 0
+            y: 135
+            width: 106
+            height: 105
+            bg_color: 0x0D2233
+            border_color: 0x1A4466
+            border_width: 1
+            radius: 6
+            on_click:
+              - lvgl.page.show: page_lux
+            widgets:
+              - label:
+                  text: "HELLIGKEIT"
+                  align: TOP_MID
+                  y: 6
+                  text_color: 0xFFE000
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_lux_val
+                  text: "--"
+                  align: CENTER
+                  y: -6
+                  text_color: 0x00D0FF
+                  text_font: montserrat_20
+              - label:
+                  text: "lux"
+                  align: BOTTOM_MID
+                  y: -6
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+
+        - button:
+            id: btn_hum
+            x: 107
+            y: 135
+            width: 106
+            height: 105
+            bg_color: 0x0D2233
+            border_color: 0x1A4466
+            border_width: 1
+            radius: 6
+            on_click:
+              - lvgl.page.show: page_hum
+            widgets:
+              - label:
+                  text: "LUFTFEUCHTE"
+                  align: TOP_MID
+                  y: 6
+                  text_color: 0xFFE000
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_hum_val
+                  text: "--"
+                  align: CENTER
+                  y: -6
+                  text_color: 0x00D0FF
+                  text_font: montserrat_20
+              - label:
+                  text: "%"
+                  align: BOTTOM_MID
+                  y: -6
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+
+        - button:
+            id: btn_noise
+            x: 214
+            y: 135
+            width: 106
+            height: 105
+            bg_color: 0x0D2233
+            border_color: 0x1A4466
+            border_width: 1
+            radius: 6
+            on_click:
+              - lvgl.page.show: page_noise
+            widgets:
+              - label:
+                  text: "LAUTSTARKE"
+                  align: TOP_MID
+                  y: 6
+                  text_color: 0xFFE000
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_noise_val
+                  text: "--"
+                  align: CENTER
+                  y: -6
+                  text_color: 0x00D0FF
+                  text_font: montserrat_20
+              - label:
+                  text: "dB"
+                  align: BOTTOM_MID
+                  y: -6
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SEITE 2: NINA RUHRPOTT
+    # ══════════════════════════════════════════════════════════════════════════
+    - id: page_nina
+      bg_color: 0x0A0A1A
+      widgets:
+        - obj:
+            align: TOP_MID
+            y: 0
+            width: 320
+            height: 30
+            bg_color: 0x8B1400
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+              - label:
+                  text: "NINA RUHRPOTT"
+                  align: LEFT_MID
+                  x: 8
+                  text_color: 0xFFFFFF
+                  text_font: montserrat_14
+              - button:
+                  align: RIGHT_MID
+                  x: -4
+                  width: 60
+                  height: 22
+                  bg_color: 0x5A0A00
+                  border_width: 0
+                  radius: 4
+                  on_click:
+                    - lvgl.page.show: page_halo
+                  widgets:
+                    - label:
+                        text: "< HALO"
+                        text_color: 0xFFFFFF
+                        text_font: montserrat_12
+                        align: CENTER
+
+        - button:
+            id: btn_ddf
+            x: 2
+            y: 32
+            width: 155
+            height: 66
+            bg_color: 0x0D2B0D
+            border_color: 0x226622
+            border_width: 1
+            radius: 6
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_detail_city
+                  text: "Dusseldorf"
+              - lvgl.label.update:
+                  id: lbl_detail_text
+                  text: !lambda 'return id(nina_warn_ddf).state.empty() ? "Keine Warnung" : id(nina_warn_ddf).state;'
+              - lvgl.page.show: page_nina_detail
+            widgets:
+              - label:
+                  text: "Dusseldorf"
+                  align: TOP_MID
+                  y: 5
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_ddf
+                  text: "OK"
+                  align: BOTTOM_MID
+                  y: -5
+                  text_color: 0x44FF88
+                  text_font: montserrat_18
+
+        - button:
+            id: btn_dui
+            x: 162
+            y: 32
+            width: 156
+            height: 66
+            bg_color: 0x0D2B0D
+            border_color: 0x226622
+            border_width: 1
+            radius: 6
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_detail_city
+                  text: "Duisburg"
+              - lvgl.label.update:
+                  id: lbl_detail_text
+                  text: !lambda 'return id(nina_warn_dui).state.empty() ? "Keine Warnung" : id(nina_warn_dui).state;'
+              - lvgl.page.show: page_nina_detail
+            widgets:
+              - label:
+                  text: "Duisburg"
+                  align: TOP_MID
+                  y: 5
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_dui
+                  text: "OK"
+                  align: BOTTOM_MID
+                  y: -5
+                  text_color: 0x44FF88
+                  text_font: montserrat_18
+
+        - button:
+            id: btn_ess
+            x: 2
+            y: 102
+            width: 155
+            height: 66
+            bg_color: 0x0D2B0D
+            border_color: 0x226622
+            border_width: 1
+            radius: 6
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_detail_city
+                  text: "Essen"
+              - lvgl.label.update:
+                  id: lbl_detail_text
+                  text: !lambda 'return id(nina_warn_ess).state.empty() ? "Keine Warnung" : id(nina_warn_ess).state;'
+              - lvgl.page.show: page_nina_detail
+            widgets:
+              - label:
+                  text: "Essen"
+                  align: TOP_MID
+                  y: 5
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_ess
+                  text: "OK"
+                  align: BOTTOM_MID
+                  y: -5
+                  text_color: 0x44FF88
+                  text_font: montserrat_18
+
+        - button:
+            id: btn_mue
+            x: 162
+            y: 102
+            width: 156
+            height: 66
+            bg_color: 0x0D2B0D
+            border_color: 0x226622
+            border_width: 1
+            radius: 6
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_detail_city
+                  text: "Mulheim"
+              - lvgl.label.update:
+                  id: lbl_detail_text
+                  text: !lambda 'return id(nina_warn_mue).state.empty() ? "Keine Warnung" : id(nina_warn_mue).state;'
+              - lvgl.page.show: page_nina_detail
+            widgets:
+              - label:
+                  text: "Mulheim"
+                  align: TOP_MID
+                  y: 5
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_mue
+                  text: "OK"
+                  align: BOTTOM_MID
+                  y: -5
+                  text_color: 0x44FF88
+                  text_font: montserrat_18
+
+        - button:
+            id: btn_obe
+            x: 2
+            y: 172
+            width: 155
+            height: 66
+            bg_color: 0x0D2B0D
+            border_color: 0x226622
+            border_width: 1
+            radius: 6
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_detail_city
+                  text: "Oberhausen"
+              - lvgl.label.update:
+                  id: lbl_detail_text
+                  text: !lambda 'return id(nina_warn_obe).state.empty() ? "Keine Warnung" : id(nina_warn_obe).state;'
+              - lvgl.page.show: page_nina_detail
+            widgets:
+              - label:
+                  text: "Oberhausen"
+                  align: TOP_MID
+                  y: 5
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_obe
+                  text: "OK"
+                  align: BOTTOM_MID
+                  y: -5
+                  text_color: 0x44FF88
+                  text_font: montserrat_18
+
+        - button:
+            id: btn_met
+            x: 162
+            y: 172
+            width: 156
+            height: 66
+            bg_color: 0x0D2B0D
+            border_color: 0x226622
+            border_width: 1
+            radius: 6
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_detail_city
+                  text: "Mettmann"
+              - lvgl.label.update:
+                  id: lbl_detail_text
+                  text: !lambda 'return id(nina_warn_met).state.empty() ? "Keine Warnung" : id(nina_warn_met).state;'
+              - lvgl.page.show: page_nina_detail
+            widgets:
+              - label:
+                  text: "Mettmann"
+                  align: TOP_MID
+                  y: 5
+                  text_color: 0xAAAAAA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_met
+                  text: "OK"
+                  align: BOTTOM_MID
+                  y: -5
+                  text_color: 0x44FF88
+                  text_font: montserrat_18
+
+        - label:
+            id: lbl_battery
+            text: "..."
+            align: BOTTOM_RIGHT
+            x: -6
+            y: -4
+            text_color: 0x446688
+            text_font: montserrat_12
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SEITE 3: SYSTEM STATUS (MDI Icons, fixe Abstände)
+    # Layout: Header(30) + 4 Tiles à 100px Höhe (y=34..233) + 6px Gap
+    # ══════════════════════════════════════════════════════════════════════════
+    - id: page_system
+      bg_color: 0x050510
+      widgets:
+        # Header
+        - obj:
+            align: TOP_MID
+            y: 0
+            width: 320
+            height: 32
+            bg_color: 0x0A3A2A
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+              - label:
+                  text: "SYSTEM STATUS"
+                  align: LEFT_MID
+                  x: 8
+                  text_color: 0x44FFB0
+                  text_font: montserrat_14
+              - button:
+                  align: RIGHT_MID
+                  x: -58
+                  width: 44
+                  height: 22
+                  bg_color: 0x1A4044
+                  border_width: 0
+                  radius: 4
+                  on_click:
+                    - lvgl.page.show: page_about
+                  widgets:
+                    - label:
+                        text: "INFO"
+                        text_color: 0xAAFFEE
+                        text_font: montserrat_12
+                        align: CENTER
+              - button:
+                  align: RIGHT_MID
+                  x: -4
+                  width: 50
+                  height: 22
+                  bg_color: 0x0E3D5C
+                  border_width: 0
+                  radius: 4
+                  on_click:
+                    - lvgl.page.show: page_halo
+                  widgets:
+                    - label:
+                        text: "< HALO"
+                        text_color: 0xFFFFFF
+                        text_font: montserrat_12
+                        align: CENTER
+
+        # ── WiFi (oben links) ────────────────────────────────────────────────
+        - obj:
+            x: 4
+            y: 38
+            width: 152
+            height: 96
+            bg_color: 0x0A1A30
+            border_color: 0x1A3A5A
+            border_width: 1
+            radius: 8
+            widgets:
+              - label:
+                  text: "\U000F05A9"  # mdi:wifi
+                  align: TOP_LEFT
+                  x: 8
+                  y: 6
+                  text_color: 0x44FF88
+                  text_font: font_mdi_28
+              - label:
+                  text: "WiFi"
+                  align: TOP_RIGHT
+                  x: -8
+                  y: 10
+                  text_color: 0xFFE000
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_sys_wifi
+                  text: "Verbunden"
+                  align: CENTER
+                  y: 8
+                  text_color: 0x44FF88
+                  text_font: montserrat_14
+              - label:
+                  id: lbl_sys_ip
+                  text: "---"
+                  align: BOTTOM_MID
+                  y: -6
+                  text_color: 0x6688AA
+                  text_font: montserrat_12
+
+        # ── Batterie (oben rechts) ────────────────────────────────────────────
+        - obj:
+            x: 164
+            y: 38
+            width: 152
+            height: 96
+            bg_color: 0x0A1A30
+            border_color: 0x1A3A5A
+            border_width: 1
+            radius: 8
+            widgets:
+              - label:
+                  id: lbl_sys_bat_icon
+                  text: "\U000F0082"  # battery-90
+                  align: TOP_LEFT
+                  x: 8
+                  y: 6
+                  text_color: 0x44FF88
+                  text_font: font_mdi_28
+              - label:
+                  text: "Batterie"
+                  align: TOP_RIGHT
+                  x: -8
+                  y: 10
+                  text_color: 0xFFE000
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_sys_bat_pct
+                  text: "--%"
+                  align: CENTER
+                  y: 8
+                  text_color: 0x44FF88
+                  text_font: montserrat_20
+              - label:
+                  id: lbl_sys_bat_bar
+                  text: "[||||]"
+                  align: BOTTOM_MID
+                  y: -6
+                  text_color: 0x44FF88
+                  text_font: montserrat_12
+
+        # ── Uhrzeit (unten links) ─────────────────────────────────────────────
+        - obj:
+            x: 4
+            y: 140
+            width: 152
+            height: 96
+            bg_color: 0x0A1A30
+            border_color: 0x1A3A5A
+            border_width: 1
+            radius: 8
+            widgets:
+              - label:
+                  text: "\U000F0954"  # mdi:clock
+                  align: TOP_LEFT
+                  x: 8
+                  y: 6
+                  text_color: 0x00D0FF
+                  text_font: font_mdi_28
+              - label:
+                  text: "Zeit"
+                  align: TOP_RIGHT
+                  x: -8
+                  y: 10
+                  text_color: 0xFFE000
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_sys_time
+                  text: "--:--"
+                  align: CENTER
+                  y: 8
+                  text_color: 0xFFFFFF
+                  text_font: montserrat_24
+              - label:
+                  id: lbl_sys_date
+                  text: "--.--.----"
+                  align: BOTTOM_MID
+                  y: -6
+                  text_color: 0x6688AA
+                  text_font: montserrat_12
+
+        # ── Wetter (unten rechts) ─────────────────────────────────────────────
+        - obj:
+            x: 164
+            y: 140
+            width: 152
+            height: 96
+            bg_color: 0x0A1A30
+            border_color: 0x1A3A5A
+            border_width: 1
+            radius: 8
+            widgets:
+              - label:
+                  text: "\U000F0595"  # mdi:weather-partly-cloudy
+                  align: TOP_LEFT
+                  x: 8
+                  y: 6
+                  text_color: 0x00D0FF
+                  text_font: font_mdi_28
+              - label:
+                  text: "Wetter"
+                  align: TOP_RIGHT
+                  x: -8
+                  y: 10
+                  text_color: 0xFFE000
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_weather_temp
+                  text: "--°C"
+                  align: CENTER
+                  y: 4
+                  text_color: 0x00D0FF
+                  text_font: montserrat_20
+              - label:
+                  id: lbl_weather_state
+                  text: "---"
+                  align: BOTTOM_LEFT
+                  x: 8
+                  y: -6
+                  text_color: 0x6688AA
+                  text_font: montserrat_12
+              - label:
+                  id: lbl_weather_hum
+                  text: "--%"
+                  align: BOTTOM_RIGHT
+                  x: -8
+                  y: -6
+                  text_color: 0x6688AA
+                  text_font: montserrat_12
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SEITE: ABOUT / MADE BY
+    # ══════════════════════════════════════════════════════════════════════════
+    - id: page_about
+      bg_color: 0x050510
+      widgets:
+        - obj:
+            align: TOP_MID
+            y: 0
+            width: 320
+            height: 32
+            bg_color: 0x1A0A3A
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+              - label:
+                  text: "ABOUT"
+                  align: LEFT_MID
+                  x: 8
+                  text_color: 0xCCAAFF
+                  text_font: montserrat_14
+              - button:
+                  align: RIGHT_MID
+                  x: -4
+                  width: 55
+                  height: 22
+                  bg_color: 0x0A3A2A
+                  border_width: 0
+                  radius: 4
+                  on_click:
+                    - lvgl.page.show: page_system
+                  widgets:
+                    - label:
+                        text: "< SYS"
+                        text_color: 0x44FFB0
+                        text_font: montserrat_12
+                        align: CENTER
+
+        # Title block
+        - label:
+            text: "About"
+            align: TOP_MID
+            y: 40
+            text_color: 0xCCAAFF
+            text_font: montserrat_18
+
+        - label:
+            text: "Halo Sensor & NINA-WARNUNGEN"
+            align: TOP_MID
+            y: 68
+            text_color: 0xFFFFFF
+            text_font: montserrat_14
+
+        # Divider
+        - obj:
+            align: TOP_MID
+            y: 92
+            width: 290
+            height: 1
+            bg_color: 0x2A2A4A
+            border_width: 0
+            pad_all: 0
+
+        # Tech Stack
+        - label:
+            text: "\U000F061A"  # chip
+            align: TOP_LEFT
+            x: 16
+            y: 100
+            text_color: 0x44FF88
+            text_font: font_mdi_28
+
+        - label:
+            text: "ESP32-S3  ESPHome 2026"
+            align: TOP_LEFT
+            x: 52
+            y: 106
+            text_color: 0x88CCFF
+            text_font: montserrat_12
+
+        - label:
+            text: "\U000F0174"  # code-tags
+            align: TOP_LEFT
+            x: 16
+            y: 132
+            text_color: 0xFF8800
+            text_font: font_mdi_28
+
+        - label:
+            text: "Python  C++  LVGL  YAML"
+            align: TOP_LEFT
+            x: 52
+            y: 138
+            text_color: 0x88CCFF
+            text_font: montserrat_12
+
+        - label:
+            text: "\U000F0176"  # coffee
+            align: TOP_LEFT
+            x: 16
+            y: 162
+            text_color: 0xAA6622
+            text_font: font_mdi_28
+
+        - label:
+            text: "Loads of Coffee"
+            align: TOP_LEFT
+            x: 52
+            y: 168
+            text_color: 0x88CCFF
+            text_font: montserrat_12
+
+        # Version + Copyright
+        - label:
+            text: "V14.04"
+            align: BOTTOM_LEFT
+            x: 16
+            y: -6
+            text_color: 0x44FF88
+            text_font: montserrat_12
+
+        - label:
+            text: "(c) ProPott - Jonathan Salim"
+            align: BOTTOM_RIGHT
+            x: -16
+            y: -6
+            text_color: 0x6666AA
+            text_font: montserrat_12
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SEITE 4: NINA DETAIL
+    # ══════════════════════════════════════════════════════════════════════════
+    - id: page_nina_detail
+      bg_color: 0x0A0A1A
+      widgets:
+        - label:
+            text: "NINA Warnung:"
+            align: TOP_LEFT
+            x: 10
+            y: 8
+            text_color: 0xFF4400
+            text_font: montserrat_14
+        - label:
+            id: lbl_detail_city
+            text: "---"
+            align: TOP_LEFT
+            x: 10
+            y: 28
+            text_color: 0xFFFFFF
+            text_font: montserrat_20
+        - obj:
+            align: TOP_MID
+            y: 56
+            width: 300
+            height: 2
+            bg_color: 0x334433
+            border_width: 0
+            pad_all: 0
+        - label:
+            id: lbl_detail_text
+            text: "Lade..."
+            align: TOP_LEFT
+            x: 10
+            y: 64
+            text_color: 0xCCCCCC
+            text_font: montserrat_14
+            long_mode: WRAP
+            width: 300
+        - button:
+            align: BOTTOM_MID
+            y: -4
+            width: 300
+            height: 40
+            bg_color: 0x0A1A0A
+            border_color: 0xFF4400
+            border_width: 1
+            radius: 8
+            on_click:
+              - lvgl.page.show: page_nina
+            widgets:
+              - label:
+                  text: "<- Ruhrpott"
+                  text_color: 0xFF4400
+                  text_font: montserrat_16
+                  align: CENTER
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SENSOR DETAIL PAGES (Template: Header + Wert gross + Bar + Min/Max)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # ── TEMPERATUR ────────────────────────────────────────────────────────────
+    - id: page_temp
+      bg_color: 0x0A0A1A
+      widgets:
+        - obj:
+            align: TOP_MID
+            y: 0
+            width: 320
+            height: 30
+            bg_color: 0x0E3D5C
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+              - button:
+                  align: LEFT_MID
+                  x: 4
+                  width: 50
+                  height: 22
+                  bg_color: 0x1A5080
+                  border_width: 0
+                  radius: 4
+                  on_click:
+                    - lvgl.page.show: page_halo
+                  widgets:
+                    - label:
+                        text: "< Back"
+                        text_color: 0xFFFFFF
+                        text_font: montserrat_12
+                        align: CENTER
+              - label:
+                  text: "TEMPERATUR"
+                  align: CENTER
+                  text_color: 0xFFE000
+                  text_font: montserrat_14
+        - label:
+            id: lbl_temp_big
+            text: "-- °C"
+            align: TOP_MID
+            y: 40
+            text_color: 0x44FF88
+            text_font: montserrat_48
+        - bar:
+            id: bar_temp
+            align: TOP_MID
+            y: 130
+            width: 280
+            height: 28
+            min_value: 0
+            max_value: 100
+            value: 0
+            indicator:
+              bg_color: 0x44FF88
+            bg_color: 0x1A3A1A
+            border_color: 0x2A5A2A
+            border_width: 1
+            radius: 4
+        - label:
+            text: "0°C"
+            align: TOP_LEFT
+            x: 20
+            y: 162
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            text: "40°C"
+            align: TOP_RIGHT
+            x: -20
+            y: 162
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            id: lbl_temp_stat
+            text: "Min --  Max --"
+            align: TOP_MID
+            y: 185
+            text_color: 0xAAAAAA
+            text_font: montserrat_16
+        - label:
+            id: lbl_temp_unit
+            text: "Seit Neustart"
+            align: TOP_MID
+            y: 208
+            text_color: 0x555577
+            text_font: montserrat_12
+
+    # ── VAPE ──────────────────────────────────────────────────────────────────
+    - id: page_vape
+      bg_color: 0x0A0A1A
+      widgets:
+        - obj:
+            align: TOP_MID
+            y: 0
+            width: 320
+            height: 30
+            bg_color: 0x0E3D5C
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+              - button:
+                  align: LEFT_MID
+                  x: 4
+                  width: 50
+                  height: 22
+                  bg_color: 0x1A5080
+                  border_width: 0
+                  radius: 4
+                  on_click:
+                    - lvgl.page.show: page_halo
+                  widgets:
+                    - label:
+                        text: "< Back"
+                        text_color: 0xFFFFFF
+                        text_font: montserrat_12
+                        align: CENTER
+              - label:
+                  text: "VAPE DETEKTOR"
+                  align: CENTER
+                  text_color: 0xFFE000
+                  text_font: montserrat_14
+        - label:
+            id: lbl_vape_big
+            text: "--"
+            align: TOP_MID
+            y: 40
+            text_color: 0xFF8800
+            text_font: montserrat_48
+        - bar:
+            id: bar_vape
+            align: TOP_MID
+            y: 130
+            width: 280
+            height: 28
+            min_value: 0
+            max_value: 100
+            value: 0
+            indicator:
+              bg_color: 0xFF8800
+            bg_color: 0x3A1A00
+            border_color: 0x5A3A00
+            border_width: 1
+            radius: 4
+        - label:
+            text: "0"
+            align: TOP_LEFT
+            x: 20
+            y: 162
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            text: "100"
+            align: TOP_RIGHT
+            x: -20
+            y: 162
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            id: lbl_vape_stat
+            text: "Min --  Max --"
+            align: TOP_MID
+            y: 185
+            text_color: 0xAAAAAA
+            text_font: montserrat_16
+        - label:
+            id: lbl_vape_unit
+            text: "Seit Neustart"
+            align: TOP_MID
+            y: 208
+            text_color: 0x555577
+            text_font: montserrat_12
+
+    # ── PRÄSENZ ───────────────────────────────────────────────────────────────
+    - id: page_pres
+      bg_color: 0x0A0A1A
+      widgets:
+        - obj:
+            align: TOP_MID
+            y: 0
+            width: 320
+            height: 30
+            bg_color: 0x0E3D5C
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+              - button:
+                  align: LEFT_MID
+                  x: 4
+                  width: 50
+                  height: 22
+                  bg_color: 0x1A5080
+                  border_width: 0
+                  radius: 4
+                  on_click:
+                    - lvgl.page.show: page_halo
+                  widgets:
+                    - label:
+                        text: "< Back"
+                        text_color: 0xFFFFFF
+                        text_font: montserrat_12
+                        align: CENTER
+              - label:
+                  text: "PRASENZ"
+                  align: CENTER
+                  text_color: 0xFFE000
+                  text_font: montserrat_14
+        - label:
+            id: lbl_pres_big
+            text: "--"
+            align: TOP_MID
+            y: 50
+            text_color: 0xFFB800
+            text_font: montserrat_36
+        - bar:
+            id: bar_pres
+            align: TOP_MID
+            y: 130
+            width: 280
+            height: 28
+            min_value: 0
+            max_value: 100
+            value: 0
+            indicator:
+              bg_color: 0xFFB800
+            bg_color: 0x2A1A00
+            border_color: 0x5A3A00
+            border_width: 1
+            radius: 4
+        - label:
+            text: "Abwesend"
+            align: TOP_LEFT
+            x: 20
+            y: 162
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            text: "Anwesend"
+            align: TOP_RIGHT
+            x: -20
+            y: 162
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            id: lbl_pres_stat
+            text: "Anwesend -- der Zeit"
+            align: TOP_MID
+            y: 185
+            text_color: 0xAAAAAA
+            text_font: montserrat_14
+        - label:
+            id: lbl_pres_unit
+            text: "Seit Neustart"
+            align: TOP_MID
+            y: 208
+            text_color: 0x555577
+            text_font: montserrat_12
+
+    # ── HELLIGKEIT ────────────────────────────────────────────────────────────
+    - id: page_lux
+      bg_color: 0x0A0A1A
+      widgets:
+        - obj:
+            align: TOP_MID
+            y: 0
+            width: 320
+            height: 30
+            bg_color: 0x0E3D5C
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+              - button:
+                  align: LEFT_MID
+                  x: 4
+                  width: 50
+                  height: 22
+                  bg_color: 0x1A5080
+                  border_width: 0
+                  radius: 4
+                  on_click:
+                    - lvgl.page.show: page_halo
+                  widgets:
+                    - label:
+                        text: "< Back"
+                        text_color: 0xFFFFFF
+                        text_font: montserrat_12
+                        align: CENTER
+              - label:
+                  text: "HELLIGKEIT"
+                  align: CENTER
+                  text_color: 0xFFE000
+                  text_font: montserrat_14
+        - label:
+            id: lbl_lux_big
+            text: "-- lux"
+            align: TOP_MID
+            y: 40
+            text_color: 0x00D0FF
+            text_font: montserrat_36
+        - bar:
+            id: bar_lux
+            align: TOP_MID
+            y: 130
+            width: 280
+            height: 28
+            min_value: 0
+            max_value: 100
+            value: 0
+            indicator:
+              bg_color: 0x00D0FF
+            bg_color: 0x001A2A
+            border_color: 0x003A5A
+            border_width: 1
+            radius: 4
+        - label:
+            text: "0"
+            align: TOP_LEFT
+            x: 20
+            y: 162
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            text: "5000 lux"
+            align: TOP_RIGHT
+            x: -20
+            y: 162
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            id: lbl_lux_stat
+            text: "Min --  Max --"
+            align: TOP_MID
+            y: 185
+            text_color: 0xAAAAAA
+            text_font: montserrat_16
+        - label:
+            id: lbl_lux_unit
+            text: "Seit Neustart"
+            align: TOP_MID
+            y: 208
+            text_color: 0x555577
+            text_font: montserrat_12
+
+    # ── LUFTFEUCHTIGKEIT ──────────────────────────────────────────────────────
+    - id: page_hum
+      bg_color: 0x0A0A1A
+      widgets:
+        - obj:
+            align: TOP_MID
+            y: 0
+            width: 320
+            height: 30
+            bg_color: 0x0E3D5C
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+              - button:
+                  align: LEFT_MID
+                  x: 4
+                  width: 50
+                  height: 22
+                  bg_color: 0x1A5080
+                  border_width: 0
+                  radius: 4
+                  on_click:
+                    - lvgl.page.show: page_halo
+                  widgets:
+                    - label:
+                        text: "< Back"
+                        text_color: 0xFFFFFF
+                        text_font: montserrat_12
+                        align: CENTER
+              - label:
+                  text: "LUFTFEUCHTIGKEIT"
+                  align: CENTER
+                  text_color: 0xFFE000
+                  text_font: montserrat_14
+        - label:
+            id: lbl_hum_big
+            text: "-- %"
+            align: TOP_MID
+            y: 40
+            text_color: 0x44AAFF
+            text_font: montserrat_48
+        - bar:
+            id: bar_hum
+            align: TOP_MID
+            y: 130
+            width: 280
+            height: 28
+            min_value: 0
+            max_value: 100
+            value: 0
+            indicator:
+              bg_color: 0x44AAFF
+            bg_color: 0x001A3A
+            border_color: 0x003A6A
+            border_width: 1
+            radius: 4
+        - label:
+            text: "0%"
+            align: TOP_LEFT
+            x: 20
+            y: 162
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            text: "100%"
+            align: TOP_RIGHT
+            x: -20
+            y: 162
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            id: lbl_hum_stat
+            text: "Min --%  Max --%"
+            align: TOP_MID
+            y: 185
+            text_color: 0xAAAAAA
+            text_font: montserrat_16
+        - label:
+            id: lbl_hum_unit
+            text: "Seit Neustart"
+            align: TOP_MID
+            y: 208
+            text_color: 0x555577
+            text_font: montserrat_12
+
+    # ── LAUTSTÄRKE ────────────────────────────────────────────────────────────
+    - id: page_noise
+      bg_color: 0x0A0A1A
+      widgets:
+        - obj:
+            align: TOP_MID
+            y: 0
+            width: 320
+            height: 30
+            bg_color: 0x0E3D5C
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+              - button:
+                  align: LEFT_MID
+                  x: 4
+                  width: 50
+                  height: 22
+                  bg_color: 0x1A5080
+                  border_width: 0
+                  radius: 4
+                  on_click:
+                    - lvgl.page.show: page_halo
+                  widgets:
+                    - label:
+                        text: "< Back"
+                        text_color: 0xFFFFFF
+                        text_font: montserrat_12
+                        align: CENTER
+              - label:
+                  text: "LAUTSTARKE"
+                  align: CENTER
+                  text_color: 0xFFE000
+                  text_font: montserrat_14
+        - label:
+            id: lbl_noise_big
+            text: "-- dB"
+            align: TOP_MID
+            y: 40
+            text_color: 0xFF6644
+            text_font: montserrat_48
+        - bar:
+            id: bar_noise
+            align: TOP_MID
+            y: 130
+            width: 280
+            height: 28
+            min_value: 0
+            max_value: 100
+            value: 0
+            indicator:
+              bg_color: 0xFF6644
+            bg_color: 0x2A0A00
+            border_color: 0x5A2A00
+            border_width: 1
+            radius: 4
+        - label:
+            text: "0 dB"
+            align: TOP_LEFT
+            x: 20
+            y: 162
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            text: "120 dB"
+            align: TOP_RIGHT
+            x: -20
+            y: 162
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            id: lbl_noise_stat
+            text: "Min --  Max --"
+            align: TOP_MID
+            y: 185
+            text_color: 0xAAAAAA
+            text_font: montserrat_16
+        - label:
+            id: lbl_noise_unit
+            text: "Seit Neustart"
+            align: TOP_MID
+            y: 208
+            text_color: 0x555577
+            text_font: montserrat_12

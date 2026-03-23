@@ -1,0 +1,262 @@
+# ============================================================
+# ESPHome: T-Display-S3 — Halo Sensor Dashboard
+# Target : LilyGO T-Display-S3 (ESP32-S3, ST7789 octal SPI)
+# Display: 320x170 landscape
+# ============================================================
+
+substitutions:
+  device_name: t-display-s3
+  friendly_name: "T-Display-S3 Halo"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  platformio_options:
+    board_build.flash_mode: qio
+    board_build.arduino.memory_type: qio_opi
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: ESP32S3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+      CONFIG_SPIRAM_RODATA: "y"
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+# ── WiFi (DHCP) ───────────────────────────────────────────
+wifi:
+  networks:
+    - ssid: !secret Basement_II_ssid
+      password: !secret Basement_II_password
+    - ssid: !secret Martin_Router_King_ssid
+      password: !secret Martin_Router_King_password
+    - ssid: !secret Wifi_4_Kettwig_ssid
+      password: !secret Wifi_4_Kettwig_password
+  ap:
+    ssid: "T-Display-S3 Fallback Hotspot"
+    password: "UidmisRfBPya"
+
+captive_portal:
+
+# ── Logging & API ─────────────────────────────────────────
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: "XVvQJoSYcplqBCbwmj1kEGyd16qUz+dBIy/ptI76uk0="
+
+ota:
+  - platform: esphome
+    password: "d14a73bbcfdd76d9cb3100c50fe64f28"
+
+# ── Time (NTP, Berlin) ────────────────────────────────────
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "Europe/Berlin"
+    servers:
+      - 0.de.pool.ntp.org
+      - 1.de.pool.ntp.org
+      - pool.ntp.org
+    on_time:
+      - seconds: 0
+        then:
+          - component.update: tdisplay
+
+# ── Halo entities from HA (native API) ───────────────────
+sensor:
+  - platform: homeassistant
+    id: halo_occupancy
+    entity_id: input_number.halo_occupancy
+    internal: true
+    on_value:
+      then:
+        - component.update: tdisplay
+
+  - platform: homeassistant
+    id: halo_temp
+    entity_id: input_number.halo_temp
+    internal: true
+    on_value:
+      then:
+        - component.update: tdisplay
+
+# ── Display Backlight — GPIO38 ────────────────────────────
+output:
+  - platform: ledc
+    pin: GPIO38
+    id: backlight_pwm
+    frequency: 2000Hz
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: "Display Backlight"
+    id: backlight
+    restore_mode: ALWAYS_ON
+    default_transition_length: 0s
+
+# ── Octal SPI bus ─────────────────────────────────────────
+spi:
+  type: octal
+  clk_pin: GPIO8
+  data_pins:
+    - GPIO39
+    - GPIO40
+    - GPIO41
+    - GPIO42
+    - number: GPIO45
+      ignore_strapping_warning: true
+    - number: GPIO46
+      ignore_strapping_warning: true
+    - GPIO47
+    - GPIO48
+
+# ── Display ───────────────────────────────────────────────
+display:
+  - platform: mipi_spi
+    model: t-display-s3
+    id: tdisplay
+    rotation: 270
+    update_interval: never
+
+    lambda: |-
+      // ── Colours ────────────────────────────────────────
+      auto BLACK   = Color(0,   0,   0);
+      auto CYAN    = Color(0,   220, 255);
+      auto YELLOW  = Color(230, 220, 0);
+      auto WHITE   = Color(255, 255, 255);
+      auto GREEN   = Color(0,   210, 60);
+      auto RED     = Color(255, 60,  60);
+      auto GREY    = Color(80,  80,  80);
+      auto DGREY   = Color(18,  18,  18);
+      auto DBLUE   = Color(0,   8,   25);
+
+      const int W = 320;
+      const int H = 170;
+
+      it.fill(BLACK);
+
+      // ══ ROW 1 — Clock top half ════════════════════════
+      // Dark blue background for clock area
+      it.filled_rectangle(0, 0, W, 88, DBLUE);
+
+      auto now = id(sntp_time).now();
+      if (now.is_valid()) {
+        char tbuf[6];
+        snprintf(tbuf, sizeof(tbuf), "%02d:%02d", now.hour, now.minute);
+        // Clock centred vertically in top half, slightly left of centre to leave room for date
+        it.print(150, 6, id(font_clock), CYAN, TextAlign::TOP_CENTER, tbuf);
+
+        // Date top-right, yellow, small
+        char dbuf[12];
+        snprintf(dbuf, sizeof(dbuf), "%02d.%02d.%04d",
+                 now.day_of_month, now.month, now.year);
+        it.print(W - 5, 8, id(font_small), YELLOW, TextAlign::TOP_RIGHT, dbuf);
+      } else {
+        it.print(150, 6, id(font_clock), GREY, TextAlign::TOP_CENTER, "--:--");
+      }
+
+      // ── Separator ──────────────────────────────────────
+      it.filled_rectangle(0, 88, W, 2, GREY);
+
+      // ══ ROW 2 — Temp left | Occupancy right ══════════
+      int row2_y = 91;
+      int col_mid = 148;
+      int panel_h = H - row2_y - 18; // leave room for footer
+
+      // Left panel bg
+      it.filled_rectangle(0, 90, col_mid, H - 90, DBLUE);
+
+      // ── TEMP label ─────────────────────────────────────
+      it.print(8, row2_y, id(font_small), GREY, "TEMP");
+
+      if (!isnan(id(halo_temp).state) && id(halo_temp).has_state()) {
+        char tempbuf[8];
+        snprintf(tempbuf, sizeof(tempbuf), "%.1f", id(halo_temp).state);
+        it.print(10, row2_y + 16, id(font_value), YELLOW, tempbuf);
+        // degree circle + C
+        it.circle(10 + 68, row2_y + 19, 3, YELLOW);
+        it.print(10 + 74, row2_y + 16, id(font_small), YELLOW, "C");
+      } else {
+        it.print(10, row2_y + 20, id(font_small), GREY, "Waiting...");
+      }
+
+      // ── Vertical divider ───────────────────────────────
+      it.filled_rectangle(col_mid, 90, 2, H - 90, GREY);
+
+      // ── OCCUPANCY ──────────────────────────────────────
+      int ox = col_mid + 8;
+      it.print(ox, row2_y, id(font_small), GREY, "OCCUPANCY");
+
+      int occ = (int) id(halo_occupancy).state;
+      bool occupied = id(halo_occupancy).has_state() && occ > 0;
+
+      if (id(halo_occupancy).has_state()) {
+        if (occupied) {
+          // Circle sized to fit in right panel
+          int cx = col_mid + 42, cy = row2_y + 28, cr = 24;
+          it.filled_circle(cx, cy, cr, Color(0, 40, 10));
+          it.circle(cx, cy, cr, GREEN);
+          char obuf[4];
+          snprintf(obuf, sizeof(obuf), "%d", occ);
+          it.print(cx, cy - 11, id(font_occ), GREEN, TextAlign::TOP_CENTER, obuf);
+          // Status text to right of circle
+          it.print(cx + cr + 6, cy - 10, id(font_small), GREEN, "IN");
+          it.print(cx + cr + 4, cy + 4,  id(font_small), GREEN, "ROOM");
+        } else {
+          int cx = col_mid + 42, cy = row2_y + 28, cr = 24;
+          it.filled_circle(cx, cy, cr, DGREY);
+          it.circle(cx, cy, cr, GREY);
+          it.print(cx, cy - 8, id(font_small), GREY, TextAlign::TOP_CENTER, "CLEAR");
+        }
+      } else {
+        it.print(ox, row2_y + 20, id(font_small), GREY, "Waiting...");
+      }
+
+      // ── Footer ─────────────────────────────────────────
+      it.filled_rectangle(0, H - 17, W, 17, DGREY);
+      {
+        char ipbuf[40];
+        network::get_ip_addresses().front().str_to(ipbuf);
+        it.printf(4, H - 13, id(font_tiny), GREY, "%s", ipbuf);
+      }
+      it.printf(W - 4, H - 13, id(font_tiny),
+                id(halo_occupancy).has_state() ? GREEN : RED,
+                TextAlign::TOP_RIGHT,
+                "HA: %s", id(halo_occupancy).has_state() ? "OK" : "WAIT");
+
+
+# ── Fonts ─────────────────────────────────────────────────
+font:
+  - file: "gfonts://Roboto"
+    id: font_clock
+    size: 72
+    glyphs: "0123456789:"
+
+  - file: "gfonts://Roboto"
+    id: font_value
+    size: 38
+    glyphs: "0123456789.-"
+
+  - file: "gfonts://Roboto"
+    id: font_occ
+    size: 28
+    glyphs: "0123456789"
+
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 14
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,:/-_ "
+
+  - file: "gfonts://Roboto"
+    id: font_tiny
+    size: 11
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,:/-_ "

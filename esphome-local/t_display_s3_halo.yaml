@@ -1,0 +1,362 @@
+################################################################################
+# ESPHome – LilyGO T-Display-S3 · Halo Sensor Dashboard
+# ─────────────────────────────────────────────────────────────────────────────
+# Board : LilyGO T-Display-S3 non-touch (ESP32-S3, 1.9" ST7789 320×170)
+# Data  : HA native API → Halo sensor entities
+# Layout:
+#   ┌─────────────────────────────────────────────┐
+#   │  HALO SENSOR              HH:MM      [WiFi] │  header
+#   ├─────────────────────────────────────────────┤
+#   │  🌡 TEMP  │  💨 CO2   │  👁 PRÄSENZ        │
+#   │  22.4°C   │  ---ppm   │  ERKANNT            │
+#   ├─────────────────────────────────────────────┤
+#   │  💡 LUX   │  📏 DIST  │  🔷 ZONE            │
+#   │  340lx    │  125cm    │  Zone A              │
+#   └─────────────────────────────────────────────┘
+#
+# ⚠ CO2: set entity_id for id: halo_co2 to your actual CO2 sensor.
+#   If you don't have one, remove the halo_co2 sensor block and its tile.
+################################################################################
+
+substitutions:
+  device_name: t-display-s3-halo
+  friendly_name: "Halo Dashboard"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: ESP32S3
+  framework:
+    type: esp-idf
+  flash_size: 16MB
+
+psram:
+  speed: 80MHz
+  mode: octal
+
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+    - ssid: !secret wifi_ssid2
+      password: !secret wifi_password2
+    - ssid: !secret wifi_ssid3
+      password: !secret wifi_password3
+  manual_ip:
+    static_ip: 192.168.178.184
+    gateway: 192.168.178.1
+    subnet: 255.255.255.0
+    dns1: 192.168.178.1
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: !secret ota_password
+
+captive_portal:
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    timezone: Europe/Berlin
+
+# ── Backlight ─────────────────────────────────────────────────────────────────
+output:
+  - platform: ledc
+    pin: GPIO38
+    frequency: 2000
+    id: backlight_pwm
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: "Display Backlight"
+    id: backlight
+    restore_mode: ALWAYS_ON
+    default_transition_length: 0s
+
+# ── Octal SPI bus ─────────────────────────────────────────────────────────────
+spi:
+  type: octal
+  clk_pin: GPIO8
+  data_pins:
+    - GPIO39
+    - GPIO40
+    - GPIO41
+    - GPIO42
+    - number: GPIO45
+      ignore_strapping_warning: true
+    - number: GPIO46
+      ignore_strapping_warning: true
+    - GPIO47
+    - GPIO48
+
+# ── HA Sensor Subscriptions ───────────────────────────────────────────────────
+sensor:
+  - platform: homeassistant
+    id: halo_temperature
+    entity_id: input_number.halo_temp
+    name: "Halo Temperature"
+    filters:
+      - heartbeat: 10s
+      - offset: 1.0   # Sensor-Kalibrierung: Halo misst ~1°C zu kalt
+
+  - platform: homeassistant
+    id: halo_illuminance
+    entity_id: input_number.halo_light
+    name: "Halo Illuminance"
+    filters:
+      - heartbeat: 10s
+
+  - platform: homeassistant
+    id: halo_vape
+    entity_id: input_number.halo_vape
+    name: "Halo Vape"
+    filters:
+      - heartbeat: 10s
+
+  - platform: homeassistant
+    id: halo_humidity
+    entity_id: input_number.halo_humidity
+    name: "Halo Humidity"
+    filters:
+      - heartbeat: 10s
+
+  - platform: homeassistant
+    id: halo_noise
+    entity_id: input_number.halo_noise
+    name: "Halo Noise"
+    filters:
+      - heartbeat: 10s
+
+  - platform: homeassistant
+    id: halo_occupancy_num
+    entity_id: input_number.halo_occupancy
+    name: "Halo Occupancy"
+    filters:
+      - heartbeat: 10s
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "WiFi IP"
+      id: wifi_ip
+
+# ── Fonts ─────────────────────────────────────────────────────────────────────
+font:
+  - file: "gfonts://Roboto@700"
+    id: font_header
+    size: 18
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .:-"
+
+  - file: "gfonts://Roboto@700"
+    id: font_label
+    size: 11
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .:-°%/"
+
+  - file: "gfonts://Roboto@700"
+    id: font_value
+    size: 22
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .:-°%/!?"
+
+  - file: "gfonts://Roboto"
+    id: font_unit
+    size: 12
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .:-°%/!"
+
+# ── Display ───────────────────────────────────────────────────────────────────
+display:
+  - platform: mipi_spi
+    model: t-display-s3
+    id: tft
+    rotation: 270
+    update_interval: 1s
+    lambda: |-
+
+      // ── helpers ─────────────────────────────────────────────────────────
+      const int W = 320, H = 170;
+      const int HDR = 30;          // header height
+      const int DIV = 52;          // y of mid divider
+      // tile x-boundaries: 3 columns
+      const int C0 = 0, C1 = 107, C2 = 213, C3 = 320;
+
+      // colors
+      Color bg       = Color(8,   8,  20);
+      Color hdr_col  = Color(14,  82, 122);   // steel blue header
+      Color div_col  = Color(30,  60,  90);
+      Color tile_bg  = Color(15,  22,  40);
+      Color cyan     = Color(0,  200, 255);
+      Color green    = Color(60, 230,  90);
+      Color red      = Color(255, 60,  40);
+      Color orange   = Color(255,150,   0);
+      Color yellow   = Color(255,230,   0);
+      Color white    = Color(255,255, 255);
+      Color gray     = Color(180,180, 200);    // brighter gray — labels
+
+      // ── background ──────────────────────────────────────────────────────
+      it.fill(bg);
+
+      // ── header bar ──────────────────────────────────────────────────────
+      it.filled_rectangle(0, 0, W, HDR, hdr_col);
+      it.print(10, 7, id(font_header), yellow, "JonS Mini Halo Sensor Display");
+
+      // clock
+      auto now = id(ha_time).now();
+      if (now.is_valid()) {
+        char tbuf[6];
+        snprintf(tbuf, sizeof(tbuf), "%02d:%02d", now.hour, now.minute);
+        it.print(208, 7, id(font_header), white, tbuf);
+      }
+
+      // WiFi bars (top-right)
+      bool wifi_ok = id(wifi_ip).has_state() && id(wifi_ip).state.length() > 3;
+      Color bar_c = wifi_ok ? green : gray;
+      it.filled_rectangle(278, 22, 4,  5, bar_c);
+      it.filled_rectangle(284, 18, 4,  9, bar_c);
+      it.filled_rectangle(290, 14, 4, 13, bar_c);
+      it.filled_rectangle(296, 10, 4, 17, bar_c);
+      if (!wifi_ok) {
+        it.line(278, 10, 299, 27, red);
+        it.line(299, 10, 278, 27, red);
+      }
+
+      // ── tile grid ───────────────────────────────────────────────────────
+      // vertical dividers
+      it.vertical_line(C1, HDR, H - HDR, div_col);
+      it.vertical_line(C2, HDR, H - HDR, div_col);
+      // horizontal mid divider
+      it.horizontal_line(0, DIV + HDR, W, div_col);
+
+      // helper lambda to draw one tile
+      // row: 0=top, 1=bottom  col: 0,1,2
+      // label: unit line  val: big value string  val_col: color
+      auto draw_tile = [&](int col, int row,
+                           const char* lbl,
+                           const char* val, Color val_col,
+                           const char* unit) {
+        int x0 = (col == 0) ? C0 : (col == 1 ? C1 : C2);
+        int x1 = (col == 0) ? C1 : (col == 1 ? C2 : C3);
+        int y0 = HDR + row * (H - HDR) / 2;
+        int y1 = HDR + (row + 1) * (H - HDR) / 2;
+        int cx = (x0 + x1) / 2;
+        int tile_h = y1 - y0;
+
+        // tile bg
+        it.filled_rectangle(x0 + 2, y0 + 2, x1 - x0 - 4, tile_h - 4, tile_bg);
+
+        // label (top of tile) — yellow
+        int lbl_y = y0 + 5;
+        it.print(cx, lbl_y, id(font_label), yellow, TextAlign::TOP_CENTER, lbl);
+
+        // value (centred)
+        int val_y = y0 + tile_h / 2 - 2;
+        it.print(cx, val_y, id(font_value), val_col, TextAlign::CENTER, val);
+
+        // unit (below value) — white
+        if (unit && unit[0]) {
+          int unit_y = y0 + tile_h - 14;
+          it.print(cx, unit_y, id(font_unit), white, TextAlign::BOTTOM_CENTER, unit);
+        }
+      };
+
+      // ── TOP ROW ─────────────────────────────────────────────────────────
+
+      // TEMPERATURE (col 0, row 0)
+      {
+        char val[12] = "---";
+        Color vc = white;
+        if (id(halo_temperature).has_state()) {
+          float t = id(halo_temperature).state;
+          snprintf(val, sizeof(val), "%.1f", t);
+          vc = (t > 28) ? red : (t < 18) ? cyan : green;
+        }
+        draw_tile(0, 0, "TEMPERATUR", val, vc, "\xc2\xb0" "C");  // °C in UTF-8
+      }
+
+      // VAPE (col 1, row 0)
+      // Sensor: negative/0 = kein Dampf (grün), >0 = Dampf erkannt (rot)
+      {
+        const char* val = "---";
+        Color vc = white;
+        if (id(halo_vape).has_state()) {
+          float v = id(halo_vape).state;
+          if (v <= 0) {
+            val = "OK";
+            vc  = green;   // grün: kein Vape/Rauch
+          } else if (v < 30) {
+            val = "SPUR";
+            vc  = orange;  // orange: Spuren
+          } else {
+            val = "ALARM";
+            vc  = red;     // rot: Vape/Rauch erkannt
+          }
+        }
+        draw_tile(1, 0, "VAPE", val, vc, "");
+      }
+
+      // OCCUPANCY (col 2, row 0)
+      {
+        const char* val = "---";
+        Color vc = white;
+        if (id(halo_occupancy_num).has_state()) {
+          if (id(halo_occupancy_num).state >= 1.0f) {
+            val = "ERKANNT";
+            vc  = orange;
+          } else {
+            val = "FREI";
+            vc  = green;
+          }
+        }
+        draw_tile(2, 0, "PRASENZ", val, vc, "");
+      }
+
+      // ── BOTTOM ROW ──────────────────────────────────────────────────────
+
+      // ILLUMINANCE (col 0, row 1)
+      {
+        char val[12] = "---";
+        Color vc = white;
+        if (id(halo_illuminance).has_state()) {
+          float lux = id(halo_illuminance).state;
+          if (lux >= 1000)
+            snprintf(val, sizeof(val), "%.1fk", lux / 1000.0f);
+          else
+            snprintf(val, sizeof(val), "%.0f", lux);
+          vc = cyan;
+        }
+        draw_tile(0, 1, "HELLIGKEIT", val, vc, "lux");
+      }
+
+      // HUMIDITY (col 1, row 1)
+      {
+        char val[12] = "---";
+        Color vc = white;
+        if (id(halo_humidity).has_state()) {
+          snprintf(val, sizeof(val), "%.0f", id(halo_humidity).state);
+          vc = (id(halo_humidity).state > 70) ? orange : (id(halo_humidity).state < 30) ? red : cyan;
+        }
+        draw_tile(1, 1, "LUFTFEUCHT", val, vc, "%");
+      }
+
+      // NOISE (col 2, row 1)
+      {
+        char val[12] = "---";
+        Color vc = white;
+        if (id(halo_noise).has_state()) {
+          snprintf(val, sizeof(val), "%.0f", id(halo_noise).state);
+          vc = (id(halo_noise).state > 70) ? orange : cyan;
+        }
+        draw_tile(2, 1, "LAUTSTARKE", val, vc, "dB");
+      }

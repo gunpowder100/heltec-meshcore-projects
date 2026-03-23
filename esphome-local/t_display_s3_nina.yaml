@@ -1,0 +1,280 @@
+################################################################################
+# ESPHome – LilyGO T-Display-S3 · NINA Warn-Dashboard
+# ─────────────────────────────────────────────────────
+# Board : LilyGO T-Display-S3 non-touch (ESP32-S3, 1.9" ST7789 320×170)
+# Bus   : Octal SPI / MIPI-SPI (NOT 4-wire SPI!)
+# BL    : GPIO38 (PWM) + GPIO15 (LCD power supply — BOTH required)
+# Flash : esphome run t_display_s3_nina.yaml --device /dev/ttyACM2
+################################################################################
+
+substitutions:
+  device_name: t-display-s3-nina
+  friendly_name: "NINA Warn-Display"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: ESP32S3
+  framework:
+    type: esp-idf
+  flash_size: 16MB
+
+psram:
+  speed: 80MHz
+  mode: octal
+
+# ── WiFi ──────────────────────────────────────────────────────────────────────
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+    - ssid: !secret wifi_ssid2
+      password: !secret wifi_password2
+    - ssid: !secret wifi_ssid3
+      password: !secret wifi_password3
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: !secret ota_password
+
+captive_portal:
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    timezone: Europe/Berlin
+
+# ── Backlight ─────────────────────────────────────────────────────────────────
+# GPIO38 = PWM backlight (GPIO15 is handled internally by mipi_spi t-display-s3)
+output:
+  - platform: ledc
+    pin: GPIO38
+    frequency: 2000
+    id: backlight_pwm
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: "Display Backlight"
+    id: backlight
+    restore_mode: ALWAYS_ON
+    default_transition_length: 0s
+
+# ── Octal SPI bus (T-Display-S3 uses 8-bit parallel-style QSPI) ───────────────
+spi:
+  type: octal
+  clk_pin: GPIO8
+  data_pins:
+    - GPIO39
+    - GPIO40
+    - GPIO41
+    - GPIO42
+    - number: GPIO45
+      ignore_strapping_warning: true
+    - number: GPIO46
+      ignore_strapping_warning: true
+    - GPIO47
+    - GPIO48
+
+# ── Display ───────────────────────────────────────────────────────────────────
+display:
+  - platform: mipi_spi
+    model: t-display-s3
+    id: tft
+    rotation: 270   # landscape, USB on left — change to 90 if mirrored
+    update_interval: 1s
+    lambda: |-
+
+      // ── Background ────────────────────────────────────────────────────────
+      it.fill(Color(8, 8, 20));
+
+      // ── Header (y 0–29) ───────────────────────────────────────────────────
+      it.filled_rectangle(0, 0, 320, 30, Color(184, 20, 13));
+      it.print(10, 7, id(font_title), Color(255, 255, 255), "NINA WARNUNGEN");
+
+      // Clock HH:MM
+      auto now = id(ha_time).now();
+      if (now.is_valid()) {
+        char tbuf[6];
+        snprintf(tbuf, sizeof(tbuf), "%02d:%02d", now.hour, now.minute);
+        it.print(216, 7, id(font_title), Color(255, 255, 255), tbuf);
+      }
+
+      // WiFi bars (top-right, 4 ascending bars)
+      bool wifi_ok = id(wifi_ip).has_state() && id(wifi_ip).state.length() > 3;
+      Color bar_col = wifi_ok ? Color(26, 224, 71) : Color(133, 133, 145);
+      it.filled_rectangle(278, 22, 4,  5, bar_col);
+      it.filled_rectangle(284, 18, 4,  9, bar_col);
+      it.filled_rectangle(290, 14, 4, 13, bar_col);
+      it.filled_rectangle(296, 10, 4, 17, bar_col);
+      if (!wifi_ok) {
+        it.line(278, 10, 299, 27, Color(255, 56, 38));
+        it.line(299, 10, 278, 27, Color(255, 56, 38));
+      }
+
+      // ── Sub-header (y 30–51) ──────────────────────────────────────────────
+      it.filled_rectangle(0, 30, 320, 22, Color(46, 10, 10));
+      it.horizontal_line(0, 52, 320, Color(230, 115, 0));
+
+      if (id(nina_count).has_state()) {
+        int n = atoi(id(nina_count).state.c_str());
+        if (n == 0) {
+          it.print(10, 34, id(font_sub), Color(26, 224, 71), "Keine aktiven Warnungen");
+        } else if (n == 1) {
+          it.print(10, 34, id(font_sub), Color(255, 133, 0), "1 aktive Warnung");
+        } else {
+          char lbl[32];
+          snprintf(lbl, sizeof(lbl), "%d aktive Warnungen", n);
+          it.print(10, 34, id(font_sub), Color(255, 56, 38), lbl);
+        }
+      }
+
+      // Last update HH:MM
+      if (id(nina_last_update).has_state() && id(nina_last_update).state.length() >= 16) {
+        char upd[14];
+        snprintf(upd, sizeof(upd), "Upd %.5s", id(nina_last_update).state.c_str() + 11);
+        it.print(310, 34, id(font_sub), Color(133, 133, 145), TextAlign::TOP_RIGHT, upd);
+      }
+
+      // ── Warning content (y 54–165) ────────────────────────────────────────
+      const char* reg_names[5] = {"ESS", "MUL", "OBE", "DUI", "MET"};
+
+      std::string reg_texts[5];
+      reg_texts[0] = id(nina_essen).has_state()      ? id(nina_essen).state      : "";
+      reg_texts[1] = id(nina_muelheim).has_state()   ? id(nina_muelheim).state   : "";
+      reg_texts[2] = id(nina_oberhausen).has_state() ? id(nina_oberhausen).state : "";
+      reg_texts[3] = id(nina_duisburg).has_state()   ? id(nina_duisburg).state   : "";
+      reg_texts[4] = id(nina_mettmann).has_state()   ? id(nina_mettmann).state   : "";
+
+      int active_idx[5];
+      int active_count = 0;
+      for (int i = 0; i < 5; i++) {
+        std::string& t = reg_texts[i];
+        if (t.length() > 3
+            && t.find("Keine") == std::string::npos
+            && t.find("unavailable") == std::string::npos
+            && t.find("unknown") == std::string::npos) {
+          active_idx[active_count++] = i;
+        }
+      }
+
+      if (active_count == 0) {
+        it.print(160, 90, id(font_title), Color(26, 224, 71),
+                 TextAlign::TOP_CENTER, "ALLE KLAR");
+        it.print(160, 120, id(font_body), Color(133, 133, 145),
+                 TextAlign::TOP_CENTER, "Keine Warnungen aktiv");
+      } else {
+        int page = (millis() / 5000) % active_count;
+        int wi   = active_idx[page];
+        std::string txt = reg_texts[wi];
+
+        Color badge_col = Color(255, 56, 38);
+        Color text_col  = Color(255, 255, 255);
+        if (txt.find("EXTREM") != std::string::npos) {
+          badge_col = Color(255, 56, 38);  text_col = Color(255, 56, 38);
+        } else if (txt.find("HOCH") != std::string::npos) {
+          badge_col = Color(255, 56, 38);  text_col = Color(255, 133, 0);
+        } else if (txt.find("MITTEL") != std::string::npos) {
+          badge_col = Color(255, 133, 0);  text_col = Color(255, 224, 0);
+        } else if (txt.find("GERING") != std::string::npos) {
+          badge_col = Color(255, 224, 0);  text_col = Color(255, 255, 255);
+        }
+
+        it.filled_rectangle(8, 57, 44, 18, badge_col);
+        it.print(30, 59, id(font_badge), Color(255, 255, 255),
+                 TextAlign::TOP_CENTER, reg_names[wi]);
+
+        for (int d = 0; d < active_count; d++) {
+          int dot_x = 160 - (active_count - 1) * 7 + d * 14;
+          if (d == page)
+            it.filled_circle(dot_x, 162, 4, Color(230, 115, 0));
+          else
+            it.filled_circle(dot_x, 162, 2, Color(133, 133, 145));
+        }
+
+        int x_text = 58, y_start = 57, line_h = 26, max_chars = 30, max_lines = 4;
+        size_t pos = 0;
+        for (int line = 0; line < max_lines && pos < txt.length(); line++) {
+          size_t end = pos + max_chars;
+          if (end >= txt.length()) {
+            end = txt.length();
+          } else {
+            size_t sp = txt.rfind(' ', end);
+            if (sp != std::string::npos && sp > pos) end = sp;
+          }
+          std::string chunk = txt.substr(pos, end - pos);
+          if (!chunk.empty() && chunk[0] == ' ') chunk = chunk.substr(1);
+          it.print(x_text, y_start + line * line_h, id(font_body), text_col, chunk.c_str());
+          pos = end;
+          if (pos < txt.length() && txt[pos] == ' ') pos++;
+        }
+      }
+
+      it.horizontal_line(0, 167, 320, Color(46, 10, 10));
+
+# ── HA Sensor Subscriptions ───────────────────────────────────────────────────
+text_sensor:
+  - platform: homeassistant
+    id: nina_essen
+    entity_id: input_text.nina_warn_ess
+    name: "NINA Essen"
+  - platform: homeassistant
+    id: nina_muelheim
+    entity_id: input_text.nina_warn_mue
+    name: "NINA Muelheim"
+  - platform: homeassistant
+    id: nina_oberhausen
+    entity_id: input_text.nina_warn_obe
+    name: "NINA Oberhausen"
+  - platform: homeassistant
+    id: nina_duisburg
+    entity_id: input_text.nina_warn_dui
+    name: "NINA Duisburg"
+  - platform: homeassistant
+    id: nina_mettmann
+    entity_id: input_text.nina_warn_met
+    name: "NINA Mettmann"
+  - platform: homeassistant
+    id: nina_count
+    entity_id: input_text.nina_active_warnings
+    name: "NINA Anzahl"
+  - platform: homeassistant
+    id: nina_last_update
+    entity_id: input_datetime.nina_last_update
+    name: "NINA Letzte Aktualisierung"
+  - platform: wifi_info
+    ip_address:
+      name: "WiFi IP"
+      id: wifi_ip
+
+# ── Fonts ─────────────────────────────────────────────────────────────────────
+font:
+  - file: "gfonts://Roboto@700"
+    id: font_title
+    size: 20
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .!?:-_/"
+  - file: "gfonts://Roboto@700"
+    id: font_sub
+    size: 13
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .!?:-_/äöüÄÖÜß"
+  - file: "gfonts://Roboto"
+    id: font_body
+    size: 15
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?:-_/()[]%°äöüÄÖÜß"
+  - file: "gfonts://Roboto@700"
+    id: font_badge
+    size: 11
+    glyphs: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .-"

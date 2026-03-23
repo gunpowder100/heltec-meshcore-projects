@@ -1,0 +1,222 @@
+esphome:
+  name: epaper-panel
+  friendly_name: ePaper Panel
+
+esp32:
+  board: seeed_xiao_esp32c3
+  variant: esp32c3
+  framework:
+    type: arduino
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  networks:
+    - ssid: !secret Basement_II_ssid
+      password: !secret Basement_II_password
+    - ssid: !secret Martin_Router_King_ssid
+      password: !secret Martin_Router_King_password
+    - ssid: !secret Wifi_4_Kettwig_ssid
+      password: !secret Wifi_4_Kettwig_password
+  ap:
+    ssid: epaper-fallback
+  use_address: 192.168.178.86
+
+captive_portal:
+
+spi:
+  clk_pin: GPIO8
+  mosi_pin: GPIO10
+
+sensor:
+  - platform: homeassistant
+    id: halo_temp
+    entity_id: input_number.halo_temp
+  - platform: homeassistant
+    id: halo_co2
+    entity_id: input_number.halo_co2
+  - platform: homeassistant
+    id: halo_humidity
+    entity_id: input_number.halo_humidity
+  - platform: homeassistant
+    id: halo_aqi
+    entity_id: input_number.halo_aqi
+  - platform: homeassistant
+    id: halo_motion
+    entity_id: input_number.halo_motion
+  - platform: homeassistant
+    id: halo_light
+    entity_id: input_number.halo_light
+  - platform: homeassistant
+    id: halo_pm10
+    entity_id: input_number.halo_pm10
+  - platform: homeassistant
+    id: halo_vape
+    entity_id: input_number.halo_vape
+  - platform: homeassistant
+    id: halo_occupancy
+    entity_id: input_number.halo_occupancy
+
+text_sensor:
+  - platform: homeassistant
+    id: weather_state
+    entity_id: weather.forecast_home
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+font:
+  - file: gfonts://Roboto
+    id: font_large
+    size: 52
+  - file: gfonts://Roboto
+    id: font_medium
+    size: 26
+  - file: gfonts://Roboto
+    id: font_small
+    size: 16
+  - file: gfonts://Roboto
+    id: font_tiny
+    size: 13
+
+display:
+  - platform: waveshare_epaper
+    model: 7.50inV2
+    cs_pin: GPIO3
+    dc_pin: GPIO5
+    reset_pin: GPIO2
+    busy_pin:
+      number: GPIO4
+      inverted: true
+    reset_duration: 2ms
+    update_interval: 60s
+    auto_clear_enabled: false
+    lambda: |-
+      it.fill(COLOR_OFF);
+
+      // ── LEFT COLUMN (x=0..390) ──
+      // Day + Date top left
+      it.strftime(20, 36, id(font_medium), TextAlign::LEFT, "%A", id(ha_time).now());
+      it.strftime(20, 62, id(font_large), TextAlign::LEFT, "%d. %b", id(ha_time).now());
+
+      // Weather icon (cloud) + state
+      it.circle(60, 110, 18);
+      it.circle(80, 104, 14);
+      it.circle(98, 110, 16);
+      it.filled_rectangle(44, 112, 72, 16);
+      if (id(weather_state).has_state()) {
+        it.printf(130, 118, id(font_small), TextAlign::LEFT, "%s", id(weather_state).state.c_str());
+      }
+
+      // Temp + Humidity boxes (like reference)
+      // Temp box
+      it.rectangle(10, 140, 175, 80);
+      // thermometer icon
+      it.circle(38, 192, 10);
+      it.rectangle(34, 152, 8, 38);
+      it.filled_circle(38, 192, 7);
+      it.filled_rectangle(36, 165, 4, 25);
+      it.printf(58, 152, id(font_tiny), TextAlign::LEFT, "Temperature");
+      if (id(halo_temp).has_state()) {
+        it.printf(58, 172, id(font_medium), TextAlign::LEFT, "%.0f C", id(halo_temp).state);
+      }
+
+      // Humidity box
+      it.rectangle(195, 140, 175, 80);
+      // drop icon
+      it.line(283, 152, 275, 166); it.line(275, 166, 275, 175);
+      it.line(275, 175, 283, 183); it.line(283, 183, 291, 175);
+      it.line(291, 175, 291, 166); it.line(291, 166, 283, 152);
+      it.printf(300, 152, id(font_tiny), TextAlign::LEFT, "Humidity");
+      if (id(halo_humidity).has_state()) {
+        it.printf(300, 172, id(font_medium), TextAlign::LEFT, "%.0f%%", id(halo_humidity).state);
+      }
+
+      // AQI + PM10 boxes
+      it.rectangle(10, 232, 175, 80);
+      it.line(28, 268, 56, 268); it.line(26, 276, 58, 276); it.line(28, 284, 56, 284);
+      it.printf(68, 242, id(font_tiny), TextAlign::LEFT, "AQI");
+      if (id(halo_aqi).has_state()) {
+        it.printf(68, 262, id(font_medium), TextAlign::LEFT, "%.0f", id(halo_aqi).state);
+      }
+
+      it.rectangle(195, 232, 175, 80);
+      it.filled_circle(218, 264, 7); it.filled_circle(232, 258, 6);
+      it.filled_circle(230, 272, 6); it.filled_circle(244, 266, 6);
+      it.printf(258, 242, id(font_tiny), TextAlign::LEFT, "PM10");
+      if (id(halo_pm10).has_state()) {
+        it.printf(258, 262, id(font_medium), TextAlign::LEFT, "%.0f", id(halo_pm10).state);
+        it.printf(258, 288, id(font_tiny), TextAlign::LEFT, "ug/m3");
+      }
+
+      // CO2 + Light boxes
+      it.rectangle(10, 324, 175, 80);
+      it.circle(28, 360, 8); it.circle(42, 354, 7); it.circle(42, 366, 7);
+      it.printf(58, 334, id(font_tiny), TextAlign::LEFT, "CO2");
+      if (id(halo_co2).has_state()) {
+        it.printf(58, 354, id(font_medium), TextAlign::LEFT, "%.0f", id(halo_co2).state);
+        it.printf(58, 380, id(font_tiny), TextAlign::LEFT, "ppm");
+      }
+
+      it.rectangle(195, 324, 175, 80);
+      it.circle(283, 360, 9);
+      it.line(283, 345, 283, 350); it.line(283, 370, 283, 375);
+      it.line(268, 360, 273, 360); it.line(293, 360, 298, 360);
+      it.line(272, 349, 276, 353); it.line(290, 367, 294, 371);
+      it.line(294, 349, 290, 353); it.line(276, 367, 272, 371);
+      it.printf(300, 334, id(font_tiny), TextAlign::LEFT, "Light");
+      if (id(halo_light).has_state()) {
+        it.printf(300, 354, id(font_medium), TextAlign::LEFT, "%.0f", id(halo_light).state);
+        it.printf(300, 380, id(font_tiny), TextAlign::LEFT, "lux");
+      }
+
+      // ── VERTICAL DIVIDER ──
+      it.line(400, 10, 400, 470);
+
+      // ── RIGHT COLUMN (x=410..800) ──
+      // Big time
+      it.strftime(605, 80, id(font_large), TextAlign::CENTER, "%H:%M", id(ha_time).now());
+
+      // Motion box
+      it.rectangle(415, 110, 175, 80);
+      it.circle(448, 132, 9);
+      it.line(448, 141, 448, 158); it.line(448, 152, 438, 166);
+      it.line(448, 152, 458, 166); it.line(448, 141, 438, 149);
+      it.line(448, 141, 458, 148);
+      it.printf(470, 120, id(font_tiny), TextAlign::LEFT, "Motion");
+      if (id(halo_motion).has_state()) {
+        it.printf(470, 140, id(font_medium), TextAlign::LEFT, "%.0f", id(halo_motion).state);
+      }
+
+      // Occupancy box
+      it.rectangle(600, 110, 175, 80);
+      it.circle(628, 130, 8); it.line(628, 138, 628, 154);
+      it.line(628, 154, 619, 168); it.line(628, 154, 637, 168);
+      it.line(628, 138, 619, 146); it.line(628, 138, 637, 145);
+      it.circle(648, 130, 8); it.line(648, 138, 648, 154);
+      it.line(648, 154, 639, 168); it.line(648, 154, 657, 168);
+      it.printf(665, 120, id(font_tiny), TextAlign::LEFT, "Occup.");
+      if (id(halo_occupancy).has_state()) {
+        it.printf(665, 140, id(font_medium), TextAlign::LEFT, "%.0f", id(halo_occupancy).state);
+      }
+
+      // Vape box
+      it.rectangle(415, 202, 175, 80);
+      it.rectangle(432, 228, 30, 14); it.rectangle(458, 232, 12, 6);
+      it.line(440, 228, 441, 218); it.line(441, 218, 440, 208);
+      it.line(449, 228, 450, 217); it.line(450, 217, 449, 207);
+      it.printf(470, 212, id(font_tiny), TextAlign::LEFT, "Vape");
+      if (id(halo_vape).has_state()) {
+        it.printf(470, 232, id(font_medium), TextAlign::LEFT, "%.0f", id(halo_vape).state);
+      }
+
+      it.strftime(605, 460, id(font_tiny), TextAlign::CENTER, "UPDATED %H:%M", id(ha_time).now());
