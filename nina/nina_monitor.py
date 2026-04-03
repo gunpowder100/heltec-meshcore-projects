@@ -25,10 +25,10 @@ NINA_BASE     = "https://warnung.bund.de/api31"
 NINA_JSON     = "/config/www/nina_current.json"
 
 REGIONS = {
-    "Essen":          "055130000000",
-    "Muelheim":       "055840000000",
-    "Oberhausen":     "055780000000",
-    "Duisburg":       "055120000000",
+    "Essen":          "051130000000",
+    "Muelheim":       "051170000000",
+    "Oberhausen":     "051190000000",
+    "Duisburg":       "051120000000",
     "Kreis Mettmann": "051580000000",
     "Velbert":        "051580056000",
 }
@@ -50,6 +50,64 @@ SEVERITY = {
     "Extreme":  "EXTREM",
     "Unknown":  "UNBEKANNT",
 }
+
+SEVERITY_EMOJI = {
+    "Minor":    "🟢",  # Grün für gering
+    "Moderate": "🟡",  # Gelb für mittel
+    "Severe":   "🟠",  # Orange für hoch
+    "Extreme":  "🔴",  # Rot für extrem
+    "Unknown":  "⚪",  # Weiß für unbekannt
+}
+
+def add_emojis_to_message(headline, severity):
+    """Fügt passende Emojis basierend auf Headline-Inhalt und Severity hinzu"""
+    # Basis-Emoji basierend auf Severity
+    emojis = [SEVERITY_EMOJI.get(severity, "⚪")]
+    
+    # Headline-basierte Emojis
+    headline_lower = headline.lower()
+    
+    if "rauch" in headline_lower or "rauchgas" in headline_lower:
+        emojis.append("💨")
+    if "feuer" in headline_lower:
+        emojis.append("🔥")
+    if "wasser" in headline_lower or "hochwasser" in headline_lower or "überschwemmung" in headline_lower:
+        emojis.append("💧")
+    if "sturm" in headline_lower or "wind" in headline_lower or "orkan" in headline_lower:
+        emojis.append("💨🌀")
+    if "unwetter" in headline_lower:
+        emojis.append("⛈️")
+    if "gewitter" in headline_lower:
+        emojis.append("⚡")
+    if "chemie" in headline_lower or "gift" in headline_lower:
+        emojis.append("☣️")
+    if "atom" in headline_lower or "strahlung" in headline_lower:
+        emojis.append("☢️")
+    if "entwarnung" in headline_lower:
+        emojis.append("✅")
+    if "test" in headline_lower:
+        emojis.append("🧪")
+    if "ess" in headline_lower or "essen" in headline_lower:
+        emojis.append("🏭")
+    if "duisburg" in headline_lower:
+        emojis.append("⚓")
+    if "mülheim" in headline_lower or "muelheim" in headline_lower:
+        emojis.append("🌉")
+    if "oberhausen" in headline_lower:
+        emojis.append("🎡")
+    
+    # Generische Emojis für bestimmte Muster
+    if any(word in headline_lower for word in ["warnung", "alarm", "gefahr"]):
+        if "🔴" not in emojis and "🟠" not in emojis:
+            emojis.append("⚠️")
+    
+    # Emojis zusammenfügen (einmalig, keine Duplikate)
+    unique_emojis = []
+    for emoji in emojis:
+        if emoji not in unique_emojis:
+            unique_emojis.append(emoji)
+    
+    return " ".join(unique_emojis) + " "
 
 HEADERS = {
     "Authorization": f"Bearer {HA_TOKEN}",
@@ -159,7 +217,8 @@ def check(test_mode=False):
         w = TEST_WARNING.copy()
         w["sent"] = datetime.now().isoformat()
         sev_de = SEVERITY.get(w["severity"], w["severity"])
-        msg = "[NINA/" + w["region"] + "] " + sev_de + ": " + w["headline"][:80]
+        emojis = add_emojis_to_message(w["headline"], w["severity"])
+        msg = emojis + "[NINA/" + w["region"] + "] " + sev_de + ": " + w["headline"][:80]
         send_channel(msg)
         send_room(msg)
         all_warnings = [w]
@@ -207,7 +266,8 @@ def check(test_mode=False):
 
             if wid not in seen:
                 sev_de = SEVERITY.get(severity, severity)
-                msg = "[NINA/" + region + "] " + sev_de + ": " + headline[:80]
+                emojis = add_emojis_to_message(headline, severity)
+                msg = emojis + "[NINA/" + region + "] " + sev_de + ": " + headline[:80]
                 send_channel(msg)
                 send_room(msg)
                 new_seen.add(wid)
