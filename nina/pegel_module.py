@@ -171,6 +171,7 @@ def check_pegel_daily(send_channel_fn, send_room_fn):
         ts_str = datetime.now().strftime("%d.%m. %H:%M")
         msg = f"📊 Ruhr-Pegel {ts_str} | " + " | ".join(parts)
         send_channel_fn(msg)
+        send_room_fn(msg)
         print(f"Pegel-Tagesbericht gesendet: {msg}")
         daily_state["last_date"] = today
         save_daily_state(daily_state)
